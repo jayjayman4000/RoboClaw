@@ -147,3 +147,31 @@ All output is labeled simulation. Scenario time advances deterministically;
 This tests the host parser and health handling. It does not prove physical USB,
 ESP-NOW, TFmini acquisition, or firmware compatibility. The v1 frames follow
 `docs/telemetry.md`; existing firmware remains supported as unverified legacy.
+
+## Discover controllers and select capabilities
+
+```powershell
+robot discover --demo
+robot discover --port COM5
+robot discover --port COM5 --save-as BodyV1
+```
+
+The offline discovery demo needs no hardware or saved configuration. Its future
+LED ring is explicitly unsupported. Demo identity cannot be saved as hardware.
+Real discovery listens on only your selected port for periodic hello messages;
+it sends no commands and does not probe other ports. Default timeout is 5 seconds.
+Legacy firmware without hello still works with manual configuration.
+
+`--save-as` asks which supported capabilities to enable, then saves after review
+to an existing robot configuration. Unknown drivers are displayed but cannot be
+enabled through this adapter. The esp32-json setup offers discovery after entering
+connection settings; skip while unplugged. One bridge entry owns one serial port.
+
+Identity advertises support, not measured presence. Identity alone does not refresh
+sensor readings. Saved discovered devices require the same controller ID at runtime;
+a different controller reports identity_mismatch and cannot produce usable readings.
+Unselected range capabilities report disabled and usable: false. The adapter remains
+read-only. No AI, LED commands or physical motor control is added.
+
+Matching telemetry-only head/body prototypes and limitations are in
+[firmware/README.md](firmware/README.md). They have not been Arduino-compiled or flashed.
