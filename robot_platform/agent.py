@@ -4,6 +4,7 @@ import threading
 import time
 from collections import deque
 from .bb8_bridge import MOODS
+from .capabilities import ACTIONS, policy, permitted_devices
 
 SYSTEM = '''You are RoboClaw, the terminal assistant for a configured robot.
 You may use ONLY the supplied tools. For questions about current distance, sensors,
@@ -47,11 +48,13 @@ class RobotRuntime:
         if self.worker:self.worker.join(timeout=2)
 
 
-def tool_definitions(runtime):
+def tool_definitions(runtime, permissions=None):
+    permissions = permissions or {}
     tools=[{'type':'function','function':{'name':'read_robot_state',
             'description':'Read current selected robot sensor observations and connection health.',
             'parameters':{'type':'object','properties':{},'additionalProperties':False}}}]
-    outputs=[name for name,driver in runtime.devices.items() if getattr(driver,'capabilities',{}).get('mood')]
+    if not permitted_devices(runtime.devices,permissions,'read_robot_state'):tools=[]
+    outputs=permitted_devices(runtime.devices,permissions,'set_buzzer_mood')
     if outputs:
         tools.append({'type':'function','function':{'name':'set_buzzer_mood',
             'description':'Request one supported head buzzer mood when asked by the user; returns execution acknowledgment.',
@@ -62,23 +65,28 @@ def tool_definitions(runtime):
 
 
 class Agent:
-    def __init__(self,backend,runtime,trace=print):
+    def __init__(self,backend,runtime,trace=print,permissions=None):
         self.backend,self.runtime,self.trace=backend,runtime,trace
-        self.tools=tool_definitions(runtime)
+        self.permissions=policy({"ai_capabilities":permissions or {}})
+        self.tools=tool_definitions(runtime,self.permissions)
         self.history=deque(maxlen=6)
 
     def execute(self,name,arguments,output_used):
+        available=permitted_devices(self.runtime.devices,self.permissions,name) if name in ACTIONS else []
+        if not available:return {'error':'AI action disabled or unavailable; no action executed'}
         if isinstance(arguments,str):
             try:arguments=json.loads(arguments)
             except ValueError:return {'error':'Invalid tool arguments'}
         if not isinstance(arguments,dict):return {'error':'Tool arguments must be an object'}
         if name=='read_robot_state':
             if arguments:return {'error':'read_robot_state takes no arguments'}
-            return self.runtime.state()
+            state=self.runtime.state()
+            if set(available)==set(self.runtime.devices):return state
+            return {'simulation':state.get('simulation'), 'devices':{n:v for n,v in state.get('devices',{}).items() if n in available},'body_pose':None,'head_pose':None}
         if name=='set_buzzer_mood':
             if set(arguments)!= {'device','mood'}:return {'error':'Expected only device and mood'}
             device,mood=arguments['device'],arguments['mood']
-            allowed=[n for n,d in self.runtime.devices.items() if getattr(d,'capabilities',{}).get('mood')]
+            allowed=available
             if not isinstance(device,str) or device not in allowed or not isinstance(mood,str) or mood not in MOODS:
                 return {'error':'Unsupported device or mood'}
             if output_used[0]:return {'error':'One buzzer request allowed per user turn; not repeated'}
@@ -93,7 +101,7 @@ class Agent:
     def turn(self,text,debug=False):
         if not isinstance(text,str) or not text.strip() or len(text)>8000:
             raise ValueError('Enter a message between 1 and 8000 characters')
-        messages=[{'role':'system','content':SYSTEM+'\nSelected devices: '+', '.join(self.runtime.devices)}]
+        messages=[{'role':'system','content':SYSTEM+'\nEnabled tools: '+', '.join(t['function']['name'] for t in self.tools)+'\nIf a needed tool is absent or access is denied, say unavailable. Do not use historical readings as current.\nSelected devices: '+', '.join(self.runtime.devices)}]
         for turn in self.history:messages.extend(turn)
         start=len(messages)
         messages.append({'role':'user','content':text})
@@ -127,9 +135,9 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None):
     backend=backend_from_settings(settings,timeout_s)
     backend.check()
     runtime=RobotRuntime(devices,snapshot)
-    agent=Agent(backend,runtime)
+    agent=Agent(backend,runtime,permissions=policy(config))
     print(f"RoboClaw | {backend.model} | devices: {', '.join(devices) or 'none'}")
-    print('Commands: /state, /tools, /debug, /reset, /quit. Stop other serial sessions before chat.')
+    print('Commands: /state, /tools, /capabilities, /debug, /reset, /quit. Stop other serial sessions before chat.')
     runtime.start()
     try:
         while True:
@@ -138,6 +146,7 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None):
             if text in ('/quit','/exit'):break
             if not text:continue
             if text=='/state':print(json.dumps(runtime.state(),indent=2));continue
+            if text=='/capabilities':print(json.dumps({'policy':agent.permissions,'tools':agent.tools},indent=2));continue
             if text=='/tools':print(json.dumps(agent.tools,indent=2));continue
             if text=='/debug':debug=not debug;print('Debug:',debug);continue
             if text=='/reset':agent.history.clear();print('Conversation reset.');continue

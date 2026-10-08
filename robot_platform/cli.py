@@ -79,6 +79,14 @@ def main(argv=None):
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
     sub.add_parser("status")
+    caps = sub.add_parser("capabilities", help="Control AI action permissions")
+    caps_sub = caps.add_subparsers(dest="cap_verb", required=True)
+    caps_sub.add_parser("list")
+    caps_sub.add_parser("setup")
+    for verb in ("enable", "disable"):
+        cap = caps_sub.add_parser(verb)
+        cap.add_argument("action", choices=["read_robot_state", "set_buzzer_mood"])
+        cap.add_argument("--device")
     ai = sub.add_parser("ai", help="Configure local, remote or hosted AI")
     ai_sub = ai.add_subparsers(dest="ai_verb", required=True)
     ai_setup = ai_sub.add_parser("setup")
@@ -164,6 +172,16 @@ def main(argv=None):
             print(f"Created {args.config} for {args.name}")
             return 0
         config = read(args.config)
+        if args.verb == "capabilities":
+            from .capabilities import report, configure, set_permission
+            if args.cap_verb == "setup":
+                return 0 if configure(args.config, config, save, drivers) else 1
+            if args.cap_verb in ("enable", "disable"):
+                config = set_permission(config, args.action, args.cap_verb == "enable", args.device)
+                save(args.config, config)
+                print("Saved. Restart chat to apply the new permissions.")
+            emit(report(config, drivers))
+            return 0
         if args.verb == "ai":
             from .ai_backend import configure_ai, backend_from_settings, doctor
             if args.ai_verb == "setup":

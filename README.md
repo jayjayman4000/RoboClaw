@@ -368,7 +368,7 @@ robot ai test
 
 Keys are read from an environment variable and never written to robot.json, debug output or GitHub. Set the variable in each runtime terminal, or configure it in your service environment. Other providers must implement the OpenAI-compatible `/models` and `/chat/completions` endpoints with function tool calls; provider-specific APIs are not supported by this adapter. HTTPS is required for hosted APIs. Requests do not follow redirects or use system proxies. Conversation text and requested sensor/tool results are sent to the selected backend. Keep hosted API keys out of pasted logs.
 
-The next platform task is capability management: enable or disable individual actions and provide a consistent interface as new devices are added.
+AI action permissions are available through `robot capabilities`; see the capability management section below.
 
 ### Tailscale onboarding
 
@@ -385,3 +385,20 @@ Onboarding reminds users to install/connect Tailscale on the remote model comput
 ### Planned robot personality
 
 Future animation setup will offer styles such as catlike curiosity, birdlike curiosity and shy behavior, plus expressiveness and animation frequency controls. This is a planned feature; no autonomous animation or motor behavior is enabled by these changes.
+
+### AI capability management
+
+Configure AI permissions after device setup, or run `robot capabilities setup` at any time. The initial actions are `read_robot_state` and `set_buzzer_mood`. Both default to enabled for compatible configured devices, preserving existing installations. Permissions can be global or per device; a global disable always overrides a device enable. Enabling an action never adds hardware support to a driver that lacks it.
+
+```powershell
+robot capabilities list
+robot capabilities setup
+robot capabilities disable set_buzzer_mood --device BodyModule
+robot capabilities enable set_buzzer_mood --device BodyModule
+robot capabilities disable read_robot_state
+robot capabilities enable read_robot_state
+```
+
+Restart chat after changing saved permissions. `/tools` shows effective AI tools and `/capabilities` shows the session's policy. Disabled tools are excluded from the model request and rejected again at dispatch, even if the model invents a call. Sensor permissions filter observations by device; when only some devices are allowed, aggregate pose fields are withheld. These permissions govern AI tools: manual `robot mood`, `/state`, `robot inspect` and local telemetry polling stay available. Previous chat history is not reused between chat sessions; permissions do not remove data already sent to a provider.
+
+Policy is stored in `ai_capabilities.actions` and `ai_capabilities.devices` in robot.json. Capability changes preserve AI connection settings and hardware configuration. A central action registry in `robot_platform/capabilities.py` defines action descriptions, driver requirements and policy resolution for both the CLI and AI dispatcher. Future hardware actions must add a registry entry, tool schema and validated handler.

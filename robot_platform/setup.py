@@ -108,6 +108,9 @@ def onboard(path, read, save, snapshot, drivers):
     if yes('Configure AI now?'):
         from .ai_backend import configure_ai
         configure_ai(path, data, save)
+    if yes("Configure AI action permissions now?"):
+        from .capabilities import configure
+        configure(path, read(path), save, drivers)
 
 
 def apply_discovery(device, controller):
