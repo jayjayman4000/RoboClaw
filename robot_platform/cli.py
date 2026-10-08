@@ -49,6 +49,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="RoboClaw robot platform")
     parser.add_argument("--config", type=Path, default=Path.home() / ".roboclaw" / "robot.json")
     sub = parser.add_subparsers(dest="verb", required=False)
+    demo = sub.add_parser("demo", help="Exercise the ESP32 parser offline; no saved configuration or hardware used")
+    demo.add_argument("--interval", type=float, default=0.5)
     init = sub.add_parser("init", help="Create a robot configuration")
     init.add_argument("name")
     sub.add_parser("setup", help="Guided first-run setup")
@@ -77,6 +79,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     devices = {}
     try:
+        if args.verb == "demo":
+            from .demo import run_demo
+            if not .05 <= args.interval <= 60:
+                raise ValueError("interval must be between 0.05 and 60 seconds")
+            for state in run_demo():
+                emit(state)
+                time.sleep(args.interval)
+            return 0
         drivers = registry()
         if args.verb == "ports":
             from .serial_driver import ports
