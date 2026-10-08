@@ -15,6 +15,10 @@ object identity. You have no working camera, navigation, motor or pose capabilit
 unless observations explicitly supply them. Distinguish simulation from hardware.
 Invalid, stale, unverified or disconnected readings with usable:false are not
 current distances. Say unavailable rather than inventing measurements.
+Ambient light is a relative ADC reading, not calibrated lux. Use light_usable for light
+freshness independently of LiDAR usable. illumination_state_usable indicates whether
+the reported GPIO state is fresh. Illumination acknowledgment does not verify
+emitted light or camera visibility. Set illumination only when explicitly requested.
 Send a buzzer mood only when the user requests it. Never claim successful execution
 without acknowledged:true. Acknowledgment reports head processing, not completion
 or independently verified audible sound. Do not say you drove, turned or saw an
@@ -43,6 +47,9 @@ class RobotRuntime:
     def mood(self,device,mood):
         with self.lock: return self.devices[device].command({'action':'mood','mood':mood,'timeout':5})
 
+    def illumination(self,device,on):
+        with self.lock:return self.devices[device].command({'action':'illumination','on':on,'timeout':5})
+
     def close(self):
         self.stop.set()
         if self.worker:self.worker.join(timeout=2)
@@ -61,6 +68,10 @@ def tool_definitions(runtime, permissions=None):
             'parameters':{'type':'object','properties':{'device':{'type':'string','enum':outputs},
                          'mood':{'type':'string','enum':list(MOODS)}},
                          'required':['device','mood'],'additionalProperties':False}}})
+    illumination=permitted_devices(runtime.devices,permissions,'set_illumination')
+    if illumination:
+        tools.append({'type':'function','function':{'name':'set_illumination','description':'Turn configured head illumination on/off only when requested; returns head processing acknowledgment.',
+                     'parameters':{'type':'object','properties':{'device':{'type':'string','enum':illumination},'on':{'type':'boolean'}},'required':['device','on'],'additionalProperties':False}}})
     return tools
 
 
@@ -83,6 +94,14 @@ class Agent:
             state=self.runtime.state()
             if set(available)==set(self.runtime.devices):return state
             return {'simulation':state.get('simulation'), 'devices':{n:v for n,v in state.get('devices',{}).items() if n in available},'body_pose':None,'head_pose':None}
+        if name=='set_illumination':
+            if set(arguments)!={'device','on'} or not isinstance(arguments.get('device'),str) or arguments['device'] not in available or type(arguments.get('on')) is not bool:
+                return {'error':'Expected supported device and boolean on'}
+            if output_used[0]:return {'error':'One output request allowed per user turn; not repeated'}
+            output_used[0]=True
+            try:result=self.runtime.illumination(arguments['device'],arguments['on'])
+            except Exception as error:result={'error':str(error),'acknowledged':False}
+            self.trace('[illumination] '+json.dumps(result));return result
         if name=='set_buzzer_mood':
             if set(arguments)!= {'device','mood'}:return {'error':'Expected only device and mood'}
             device,mood=arguments['device'],arguments['mood']
