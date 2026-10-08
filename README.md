@@ -108,3 +108,26 @@ safety contract or isolation for blocking third-party drivers.
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+## Windows troubleshooting
+
+The installer cannot change the PATH of the PowerShell process that launched it.
+To use commands immediately in that terminal:
+
+```powershell
+$env:Path = "$env:USERPROFILE\.roboclaw\bin;" + $env:Path
+robot ports
+```
+
+Or, from the checkout, bypass PATH:
+
+```powershell
+.\.venv\Scripts\robot.exe ports
+```
+
+If discovery lists no ports, check that the boards are connected, the cable carries
+USB data, and Windows Device Manager lists a serial port. Use that exact port
+name. Numeric entries such as `5` are normalized to `COM5` on Windows, but do not
+prove that COM5 exists. The adapter reads the body bridge, not the head's startup
+messages. Correct an existing device using `robot remove NAME` then
+`robot add sensor NAME --driver esp32-json --set port=COM5` with the actual port.

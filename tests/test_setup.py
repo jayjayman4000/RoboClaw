@@ -29,3 +29,12 @@ class SetupTest(unittest.TestCase):
         with patch('builtins.input', side_effect=['1', 'custom_range']):
             device = select_device({'third-party-range': SimRange}, [])
         self.assertEqual(device['driver'], 'third-party-range')
+
+    def test_windows_port_numbers_are_normalized(self):
+        from robot_platform.setup import normalize_windows_port, settings
+        from robot_platform.serial_driver import SerialTelemetry
+        self.assertEqual(normalize_windows_port('4'), 'COM4')
+        self.assertEqual(normalize_windows_port(' com05 '), 'COM5')
+        with patch('robot_platform.setup.os.name', 'nt'):
+            self.assertEqual(settings(SerialTelemetry, {'port': '5'}, interactive=False)['port'], 'COM5')
+        with self.assertRaises(ValueError): normalize_windows_port('COM0')
