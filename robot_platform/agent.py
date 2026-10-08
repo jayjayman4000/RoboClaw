@@ -119,11 +119,11 @@ class Agent:
         raise ValueError('No final answer')
 
 
-def chat(config,devices,snapshot,debug=False):
+def chat(config,devices,snapshot,debug=False,timeout_s=None):
     from .ollama_backend import OllamaBackend
     settings=config.get('ai_backend',{})
     if settings.get('provider')!='ollama':raise ValueError('Run robot ai setup first')
-    backend=OllamaBackend(settings.get('endpoint','http://localhost:11434'),settings.get('model'))
+    backend=OllamaBackend(settings.get('endpoint','http://localhost:11434'),settings.get('model'), timeout_s if timeout_s is not None else settings.get('timeout_s',180))
     backend.check()
     runtime=RobotRuntime(devices,snapshot)
     agent=Agent(backend,runtime)
@@ -141,7 +141,7 @@ def chat(config,devices,snapshot,debug=False):
             if text=='/debug':debug=not debug;print('Debug:',debug);continue
             if text=='/reset':agent.history.clear();print('Conversation reset.');continue
             try:
-                print('Thinking...',flush=True)
+                print(f'Waiting for local model (up to {backend.timeout_s:g}s per request)...',flush=True)
                 print('RoboClaw> '+agent.turn(text,debug))
             except KeyboardInterrupt:break
             except (ValueError,OSError,TypeError) as error:
