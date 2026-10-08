@@ -16,7 +16,7 @@ class SetupTest(unittest.TestCase):
     def test_onboarding_and_cancel_preserves_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'robot.json'
-            self.invoke(path, ['', 'y', '3', 'lidar', 'n', 'y'])
+            self.invoke(path, ['', 'y', '3', 'lidar', 'n', 'y', 'n'])
             data = json.loads(path.read_text())
             self.assertEqual(len(data['devices']), 1)
             original = path.read_bytes()
