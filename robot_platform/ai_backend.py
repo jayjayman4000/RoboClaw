@@ -99,11 +99,16 @@ def backend_from_settings(settings, timeout_s=None):
     raise ValueError('Run robot ai setup first')
 
 
-def configure_ai(path, config, save, endpoint=None, model=None, timeout_s=None, mode=None, api_key_env=None):
+def configure_ai(path, config, save, endpoint=None, model=None, timeout_s=None, mode=None, api_key_env=None, network=None):
     from .setup import choose, yes
     old = config.get('ai_backend', {})
     if mode is None:
         mode = ['local','remote','api'][choose('AI connection', ['Local Ollama on this computer','Remote Ollama through Tailscale or LAN','Hosted API with an API key (OpenAI-compatible)'])]
+    if mode == 'remote':
+        network = network or ['tailscale','direct'][choose('Remote network', ['Tailscale (check/install and connect first)','Direct LAN or existing network'])]
+        if network == 'tailscale':
+            from .tailscale_setup import ensure_tailscale
+            ensure_tailscale()
     default = old.get('endpoint') if old.get('mode','local') == mode else None
     default = default or {'local':'http://localhost:11434','remote':'','api':'https://api.openai.com/v1'}[mode]
     endpoint = endpoint or input(f'AI endpoint [{default}]: ').strip() or default
@@ -119,6 +124,7 @@ def configure_ai(path, config, save, endpoint=None, model=None, timeout_s=None, 
         if not names:raise ValueError('No models available on the selected endpoint')
         backend.model = names[choose('Available models', names)]
     settings = backend.check()
+    if mode == "remote":settings["network"] = network
     if mode == 'api':
         # Explicit tool probe, no hardware runtime and no action dispatch.
         tool = {'type':'function','function':{'name':'connection_probe','description':'Confirm API tool calling','parameters':{'type':'object','properties':{},'additionalProperties':False}}}
