@@ -90,7 +90,7 @@ def select_device(drivers, devices, kind=None, name=None, selected=None, supplie
 
 
 def onboard(path, read, save, snapshot, drivers):
-    print('RoboClaw | Robot setup\nInstalled drivers support simulation and ESP32 bridges. Configure local AI with robot ai setup.')
+    print('RoboClaw | Robot setup\nInstalled drivers support simulation and ESP32 bridges. Choose local, remote or hosted AI with robot ai setup.')
     current = read(path) if path.exists() else {'schema_version': 1, 'robot': 'bb8', 'devices': []}
     if path.exists() and not yes(f'Update existing robot {current["robot"]}? Existing devices will be retained'): return
     name = input(f'Robot name [{current["robot"]}]: ').strip() or current['robot']
@@ -105,6 +105,9 @@ def onboard(path, read, save, snapshot, drivers):
         return
     save(path, data)
     print(f'Saved {path}\nNext commands: robot ports, robot test DEVICE, robot inspect, robot run')
+    if yes('Configure AI now?'):
+        from .ai_backend import configure_ai
+        configure_ai(path, data, save)
 
 
 def apply_discovery(device, controller):
