@@ -82,6 +82,7 @@ def main(argv=None):
     ai = sub.add_parser("ai", help="Configure local, remote or hosted AI")
     ai_sub = ai.add_subparsers(dest="ai_verb", required=True)
     ai_setup = ai_sub.add_parser("setup")
+    ai_setup.add_argument("--network", choices=["tailscale", "direct"])
     ai_setup.add_argument("--mode", choices=["local", "remote", "api"])
     ai_setup.add_argument("--api-key-env")
     ai_setup.add_argument("--endpoint")
@@ -166,7 +167,7 @@ def main(argv=None):
         if args.verb == "ai":
             from .ai_backend import configure_ai, backend_from_settings, doctor
             if args.ai_verb == "setup":
-                return 0 if configure_ai(args.config, config, save, args.endpoint, args.model, args.timeout, args.mode, args.api_key_env) else 1
+                return 0 if configure_ai(args.config, config, save, args.endpoint, args.model, args.timeout, args.mode, args.api_key_env, args.network) else 1
             settings = config.get("ai_backend", {})
             if args.ai_verb == "status":
                 emit(settings)
