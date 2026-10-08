@@ -1,0 +1,86 @@
+"""Local Ollama API adapter; no SDK dependency, API keys or shell execution."""
+import json
+import urllib.request
+import urllib.error
+from urllib.parse import urlparse
+
+
+def local_endpoint(value):
+    parsed = urlparse(value)
+    if parsed.scheme not in ('http', 'https') or parsed.hostname not in ('localhost', '127.0.0.1', '::1') or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
+        raise ValueError('Use a local Ollama endpoint such as http://localhost:11434')
+    return value.rstrip('/')
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('Local Ollama redirects are not supported')
+
+
+class OllamaBackend:
+    def __init__(self, endpoint='http://localhost:11434', model=None):
+        self.endpoint = local_endpoint(endpoint)
+        self.model = model
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+    def request(self, path, payload=None, timeout=60):
+        data = None if payload is None else json.dumps(payload, allow_nan=False).encode()
+        request = urllib.request.Request(self.endpoint + path, data=data, headers={'Content-Type':'application/json'})
+        try:
+            with self.opener.open(request, timeout=timeout) as response:
+                raw = response.read(2_000_001)
+            if len(raw)>2_000_000: raise ValueError('Ollama response exceeds size limit')
+            result = json.loads(raw)
+            if not isinstance(result,dict): raise ValueError('Invalid Ollama response')
+            if result.get('error'): raise ValueError('Ollama: ' + str(result['error']))
+            return result
+        except urllib.error.HTTPError as error:
+            raise ValueError(f'Ollama returned HTTP {error.code}; check model installation/tool support') from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise ValueError('Cannot reach local Ollama or request timed out. Start Ollama and retry.') from error
+
+    def models(self):
+        values=self.request('/api/tags',timeout=5).get('models',[])
+        if not isinstance(values,list): raise ValueError('Invalid Ollama model list')
+        return [m['name'] for m in values if isinstance(m,dict) and isinstance(m.get('name'),str) and ':cloud' not in m['name']]
+
+    def check(self):
+        if not isinstance(self.model,str) or not self.model.strip() or ':cloud' in self.model:
+            raise ValueError('Choose a downloaded local model')
+        metadata=self.request('/api/show',{'model':self.model},timeout=10)
+        if metadata.get('remote_host') or metadata.get('remote_model'):
+            raise ValueError('Choose a local model; this setup does not use cloud inference')
+        capabilities = metadata.get('capabilities', [])
+        if not isinstance(capabilities, list) or 'tools' not in capabilities:
+            raise ValueError('Selected model does not report tool support; choose a tool-capable model')
+        return {'provider':'ollama','endpoint':self.endpoint,'model':self.model,'status':'configured','tool_support':True}
+
+    def complete(self,messages,tools):
+        response=self.request('/api/chat',{'model':self.model,'messages':messages,'tools':tools,
+                              'stream':False,'think':False,'options':{'temperature':0,'num_predict':1024}})
+        message=response.get('message')
+        if not isinstance(message,dict) or message.get('role')!='assistant' or not isinstance(message.get('content',''),str):
+            raise ValueError('Invalid assistant response from Ollama')
+        return message
+
+
+def configure_ai(path,config,save,endpoint=None,model=None):
+    from .setup import choose,yes
+    old=config.get('ai_backend',{})
+    print('RoboClaw | Local AI setup (Ollama)')
+    endpoint=endpoint or (input(f"Ollama endpoint [{old.get('endpoint','http://localhost:11434')}]: ").strip() or old.get('endpoint','http://localhost:11434'))
+    backend=OllamaBackend(endpoint,model)
+    if model is None:
+        names=backend.models()
+        if not names:
+            print('No local models found. Download one with: ollama pull qwen3:4b')
+            return False
+        backend.model=names[choose('Installed local models',names)]
+    settings=backend.check()
+    print(f"Model: {backend.model} | endpoint: {backend.endpoint} | tool support: yes")
+    if not yes('Save AI configuration?'):
+        print('Cancelled. Configuration unchanged.')
+        return False
+    save(path,{**config,'ai_backend':settings})
+    print('Saved. Next: robot chat --device BodyModule --debug')
+    return True
