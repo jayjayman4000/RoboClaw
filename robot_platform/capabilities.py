@@ -3,6 +3,7 @@ from copy import deepcopy
 
 ACTIONS = {
     'read_robot_state': {'description':'Read live sensor observations and connection health','driver_capability':None},
+    'set_illumination': {'description':'Turn configured illumination on or off','driver_capability':'illumination'},
     'set_buzzer_mood': {'description':'Request a supported buzzer mood','driver_capability':'mood'},
 }
 
@@ -45,7 +46,7 @@ def report(config, drivers):
         devices=[]
         for item in config['devices']:
             cls = drivers.get(item['driver'])
-            available = bool(item.get('enabled',True) and cls and supported(cls,action))
+            available = bool(item.get('enabled',True) and cls and (supported(cls,action) or (action=='set_illumination' and item['driver']=='bb8-v2' and 'illumination' in item.get('extensions',[]))))
             devices.append({'device':item['name'],'available':available,'enabled':allowed(settings,action,item['name']),
                             'effective':available and allowed(settings,action,item['name'])})
         rows.append({'action':action,'description':spec['description'],'enabled':allowed(settings,action),'devices':devices})
