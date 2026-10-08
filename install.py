@@ -44,9 +44,14 @@ def main():
                         current = ""
                     if str(target).casefold() not in [p.casefold() for p in current.split(";")]:
                         winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, current.rstrip(";") + ";" + str(target))
-                print("User PATH updated. Restart your terminal application to use robot or roboclaw.")
+                print("User PATH is saved. For this PowerShell session, run:")
+                print('$env:Path = "' + str(target) + ';" + $env:Path')
+                print("Or fully close and reopen your terminal application.")
         else:
             print(f'For future terminals, add this to your shell profile: export PATH="{target}:$PATH"')
+    if os.name == "nt":
+        print("You can also run commands directly from this checkout:")
+        print(r".\.venv\Scripts\robot.exe ports")
     print("\nStarting guided setup...\n")
     return subprocess.call([str(python), "-m", "robot_platform.cli", "setup"], cwd=root)
 

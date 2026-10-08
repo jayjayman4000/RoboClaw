@@ -1,5 +1,6 @@
 """Terminal setup populated by installed driver metadata."""
 import math
+import os
 
 
 def choose(prompt, options):
@@ -21,6 +22,18 @@ def yes(prompt):
         print('Enter yes or no.')
 
 
+def normalize_windows_port(value):
+    value = str(value).strip()
+    if value.isdigit():
+        value = 'COM' + value
+    if value.upper().startswith('COM'):
+        suffix = value[3:]
+        if not suffix.isdigit() or int(suffix) < 1:
+            raise ValueError('Enter a serial port such as COM4')
+        value = 'COM' + str(int(suffix))
+    return value
+
+
 def settings(cls, supplied=None, interactive=True):
     result = dict(supplied or {})
     fields = getattr(cls, 'fields', {})
@@ -36,6 +49,8 @@ def settings(cls, supplied=None, interactive=True):
         converter = {'str': str, 'int': int, 'float': float}.get(spec.get('type', 'str'))
         if converter is None: raise ValueError(f'Unsupported field type for {key}')
         value = converter(value)
+        if key == 'port' and os.name == 'nt':
+            value = normalize_windows_port(value)
         if isinstance(value, (int, float)) and (not math.isfinite(value) or value < spec.get('min', -math.inf) or value > spec.get('max', math.inf)):
             raise ValueError(f'{key} outside allowed range')
         if spec.get('required') and not str(value).strip(): raise ValueError(f'{key} is required')
@@ -56,7 +71,11 @@ def select_device(drivers, devices, kind=None, name=None, selected=None, supplie
     if 'port' in getattr(cls, 'fields', {}) and supplied is None:
         from .serial_driver import ports
         print('Available serial ports (select by entering port below):')
-        for p in ports(): print(f'  {p["port"]}: {p["description"]}')
+        discovered = ports()
+        for p in discovered: print(f'  {p["port"]}: {p["description"]}')
+        if not discovered:
+            print('  No ports detected. Check USB connection/cable and Device Manager. You can enter a port manually.')
+        print('Enter the full port name, e.g. COM4 on Windows or /dev/ttyACM0 on Linux.')
     options = settings(cls, supplied, interactive=supplied is None)
     return {'name': name, 'kind': cls.kind, 'driver': selected, 'enabled': True, **options}
 
