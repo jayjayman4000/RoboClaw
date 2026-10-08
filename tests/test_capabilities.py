@@ -37,7 +37,7 @@ class CapabilityTest(unittest.TestCase):
         original={'devices':[{'name':'BodyModule','driver':'bridge'}],'ai_backend':{'mode':'remote'}}
         changed=set_permission(original,'set_buzzer_mood',False,'BodyModule')
         self.assertNotIn('ai_capabilities',original);self.assertEqual(changed['ai_backend'],original['ai_backend'])
-        with patch('builtins.input',side_effect=['n','n','n']),redirect_stdout(StringIO()):
+        with patch('builtins.input',side_effect=['n','n','n','n']),redirect_stdout(StringIO()):
             self.assertFalse(configure('unused',original,lambda *a:self.fail('Unexpected save'),{'bridge':Driver}))
     def test_cli_disable_persists_without_opening_devices(self):
         with tempfile.TemporaryDirectory() as directory:

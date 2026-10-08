@@ -105,6 +105,11 @@ def onboard(path, read, save, snapshot, drivers):
         return
     save(path, data)
     print(f'Saved {path}\nNext commands: robot ports, robot test DEVICE, robot inspect, robot run')
+    for device in data['devices']:
+        if device.get('enabled',True) and device['driver']=='bb8-v2' and yes(f"Detect additional head hardware for {device['name']}?"):
+            from .hardware import configure as configure_hardware
+            configure_hardware(path,read(path),save,device['name'])
+    data=read(path)
     if yes('Configure AI now?'):
         from .ai_backend import configure_ai
         configure_ai(path, data, save)

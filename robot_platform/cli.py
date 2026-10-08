@@ -75,6 +75,18 @@ def main(argv=None):
     from .bb8_bridge import MOODS
     mood.add_argument("mood", choices=MOODS)
     mood.add_argument("--timeout", type=float, default=5)
+    hardware = sub.add_parser("hardware", help="Detect and enable firmware hardware extensions")
+    hardware_sub = hardware.add_subparsers(dest="hardware_verb",required=True)
+    hardware_setup = hardware_sub.add_parser("setup")
+    hardware_setup.add_argument("name")
+    hardware_setup.add_argument("--timeout",type=float,default=5)
+    light = sub.add_parser("light",help="Read ambient light from a configured head sensor")
+    light.add_argument("name")
+    light.add_argument("--timeout",type=float,default=5)
+    illumination = sub.add_parser("illumination",help="Switch configured head illumination explicitly")
+    illumination.add_argument("name")
+    illumination.add_argument("state",choices=["on","off"])
+    illumination.add_argument("--timeout",type=float,default=5)
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -85,7 +97,7 @@ def main(argv=None):
     caps_sub.add_parser("setup")
     for verb in ("enable", "disable"):
         cap = caps_sub.add_parser(verb)
-        cap.add_argument("action", choices=["read_robot_state", "set_buzzer_mood"])
+        cap.add_argument("action", choices=["read_robot_state", "set_buzzer_mood", "set_illumination"])
         cap.add_argument("--device")
     ai = sub.add_parser("ai", help="Configure local, remote or hosted AI")
     ai_sub = ai.add_subparsers(dest="ai_verb", required=True)
@@ -236,6 +248,14 @@ def main(argv=None):
         if args.verb == "status":
             emit(config)
             return 0
+        if args.verb == "hardware":
+            from .hardware import configure
+            return 0 if configure(args.config,config,save,args.name,args.timeout) else 1
+        if args.verb in ("light","illumination"):
+            from .hardware import operate
+            result=operate(config,args.name,args.verb,getattr(args,"state",None),args.timeout)
+            emit(result)
+            return 0 if result.get("usable",result.get("acknowledged",False)) else 1
         if args.verb == "mood":
             device = next((d for d in config["devices"] if d["name"] == args.name), None)
             if not device or device["driver"] != "bb8-v2" or not device.get("enabled", True):

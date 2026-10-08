@@ -11,13 +11,17 @@ class BB8Bridge(SerialTelemetry):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.capabilities = dict(type(self).capabilities)
+        extensions=self.config.get('extensions',[])
+        if not isinstance(extensions,list) or set(extensions)-{'ambient_light','illumination'}:raise ValueError('Unknown BB8 extensions')
+        if 'illumination' in extensions:self.capabilities['illumination']={'values':[False,True],'acknowledged':True}
         self.events = []
         self.sleep = time.sleep
 
     def _accept(self, line):
         try:
             event = json.loads(line)
-            if isinstance(event, dict) and event.get('type') in ('command_sent', 'command_ack', 'error'):
+            if isinstance(event, dict) and event.get('type') in ('command_sent', 'command_ack', 'illumination_ack', 'error'):
                 kind = event['type']
                 if kind != 'error' and (type(event.get('id')) is not int or not 0 <= event['id'] <= 0xffffffff):
                     raise ValueError('Invalid command ID')
@@ -25,6 +29,7 @@ class BB8Bridge(SerialTelemetry):
                     raise ValueError('Invalid radio acceptance')
                 if kind == 'command_ack' and (type(event.get('mood')) is not int or not 0 <= event['mood'] < len(MOODS)):
                     raise ValueError('Invalid acknowledged mood')
+                if kind == 'illumination_ack' and type(event.get('on')) is not bool:raise ValueError('Invalid illumination acknowledgment')
                 self.events.append(event)
                 self.events = self.events[-32:]
                 return
@@ -33,9 +38,21 @@ class BB8Bridge(SerialTelemetry):
             return
         super()._accept(line)
 
+    def observe(self):
+        state=super().observe()
+        if 'ambient_light' not in self.config.get('extensions',[]):
+            for key in ('light_raw','light_age_ms','light_percent','light_units'):state.pop(key,None)
+            state['light_usable']=False
+        if 'illumination' not in self.config.get('extensions',[]):
+            state.pop('illumination_on',None);state['illumination_state_usable']=False
+        return state
+
     def command(self, action):
         mood = action.get('mood')
-        if action.get('action') != 'mood' or mood not in MOODS:
+        is_light=action.get('action')=='illumination'
+        if is_light:
+            if 'illumination' not in self.capabilities or type(action.get('on')) is not bool:raise ValueError('Enable illumination hardware and supply on as a boolean')
+        elif action.get('action') != 'mood' or mood not in MOODS:
             raise ValueError('Supported action: mood with ' + ', '.join(MOODS))
         timeout = action.get('timeout', 5)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not .1 <= timeout <= 60:
@@ -44,17 +61,20 @@ class BB8Bridge(SerialTelemetry):
         result = {'action': 'mood', 'mood': mood, 'source': 'hardware', 'sent': False,
                   'accepted_by_radio': False, 'acknowledged': False, 'command_id': None,
                   'note': 'Acknowledgment reports head processing; it does not verify audible playback'}
+        if is_light:
+            result.update(action='illumination',on=action['on'],note='Acknowledgment confirms head GPIO processing; it does not verify emitted light')
+            result.pop('mood')
         state = None
         while self.clock() < deadline:
             state = self.observe()
-            if state.get('telemetry_schema') == 'bb8-v2' and state.get('head_link_valid') is True and state.get('received_age_s', 10) <= .35:
+            if state.get('telemetry_schema') == 'bb8-v2' and state.get('head_link_valid') is True and state.get('received_age_s', 10) <= .35 and (not is_light or state.get('illumination_supported') is True):
                 break
             self.sleep(.05)
         else:
             return {**result, 'status': 'not_sent', 'error': 'No recent connected BB8 v2.1 head telemetry', 'observation': state}
         # Drop pre-command acknowledgments. Only one request is written, never auto-retried.
         self.events.clear()
-        payload = (mood + '\n').encode('ascii')
+        payload = (('illumination '+('on' if action['on'] else 'off') if is_light else mood) + '\n').encode('ascii')
         try:
             self.serial.write_timeout = .5
             if self.serial.write(payload) != len(payload):
@@ -74,7 +94,8 @@ class BB8Bridge(SerialTelemetry):
                         return {**result, 'status': 'radio_rejected'}
             if result['command_id'] is not None:
                 for event in self.events:
-                    if event['type'] == 'command_ack' and event['id'] == result['command_id'] and event['mood'] == MOODS.index(mood):
+                    if event['type'] not in ('command_ack','illumination_ack'):continue
+                    if event['id'] == result['command_id'] and ((is_light and event['type']=='illumination_ack' and event['on']==action['on']) or (not is_light and event['type']=='command_ack' and event['mood']==MOODS.index(mood))):
                         return {**result, 'acknowledged': True, 'status': 'acknowledged'}
             if state.get('connection') == 'disconnected':
                 return {**result, 'status': 'disconnected', 'error': state.get('error')}
