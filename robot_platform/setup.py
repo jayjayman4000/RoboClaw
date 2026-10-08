@@ -1,74 +1,79 @@
-"""Terminal onboarding. Planned hardware is explicitly disabled."""
-from pathlib import Path
+"""Terminal setup populated by installed driver metadata."""
+import math
 
 
 def choose(prompt, options):
-    print("\n" + prompt)
-    for index, label in enumerate(options, 1):
-        print(f"  {index}. {label}")
+    print('\n' + prompt)
+    for i, label in enumerate(options, 1):
+        print(f'  {i}. {label}')
     while True:
-        value = input("Choose a number [1]: ").strip() or "1"
+        value = input('Choose a number [1]: ').strip() or '1'
         if value.isdigit() and 1 <= int(value) <= len(options):
             return int(value) - 1
-        print("Please enter one of the listed numbers.")
+        print('Please enter one of the listed numbers.')
 
 
 def yes(prompt):
     while True:
-        value = input(prompt + " [Y/n]: ").strip().lower()
-        if value in ("", "y", "yes"):
-            return True
-        if value in ("n", "no"):
-            return False
-        print("Enter yes or no.")
+        value = input(prompt + ' [Y/n]: ').strip().lower()
+        if value in ('', 'y', 'yes'): return True
+        if value in ('n', 'no'): return False
+        print('Enter yes or no.')
+
+
+def settings(cls, supplied=None, interactive=True):
+    result = dict(supplied or {})
+    fields = getattr(cls, 'fields', {})
+    if set(result) - set(fields):
+        raise ValueError('Unknown driver settings: ' + ', '.join(set(result) - set(fields)))
+    for key, spec in fields.items():
+        value = result.get(key, spec.get('default'))
+        if interactive:
+            value = input(f'{key}' + (f' [{value}]' if value is not None else '') + ': ').strip() or value
+        if value is None:
+            if spec.get('required'): raise ValueError(f'{key} is required')
+            continue
+        converter = {'str': str, 'int': int, 'float': float}.get(spec.get('type', 'str'))
+        if converter is None: raise ValueError(f'Unsupported field type for {key}')
+        value = converter(value)
+        if isinstance(value, (int, float)) and (not math.isfinite(value) or value < spec.get('min', -math.inf) or value > spec.get('max', math.inf)):
+            raise ValueError(f'{key} outside allowed range')
+        if spec.get('required') and not str(value).strip(): raise ValueError(f'{key} is required')
+        result[key] = value
+    return result
+
+
+def select_device(drivers, devices, kind=None, name=None, selected=None, supplied=None):
+    choices = {n: c for n, c in drivers.items() if kind is None or c.kind == kind}
+    if not choices: raise ValueError('No installed drivers for this device kind')
+    if selected is None:
+        names = list(choices)
+        selected = names[choose('Installed drivers', [f'{n}: {getattr(c, "label", c.__name__)}' for n, c in choices.items()])]
+    if selected not in choices: raise ValueError('Unknown driver or driver kind mismatch')
+    cls = choices[selected]
+    name = name or input('Device name: ').strip()
+    if not name or any(d['name'] == name for d in devices): raise ValueError('Device name must be nonempty and unique')
+    if 'port' in getattr(cls, 'fields', {}) and supplied is None:
+        from .serial_driver import ports
+        print('Available serial ports (select by entering port below):')
+        for p in ports(): print(f'  {p["port"]}: {p["description"]}')
+    options = settings(cls, supplied, interactive=supplied is None)
+    return {'name': name, 'kind': cls.kind, 'driver': selected, 'enabled': True, **options}
 
 
 def onboard(path, read, save, snapshot, drivers):
-    print("RoboClaw | Robot setup\n")
-    print("This release supports simulation. Hardware and AI connections are planned.")
-    if path.exists():
-        current = read(path)
-        if not yes(f"Update existing robot '{current['robot']}'? Original devices will be retained"):
-            return
-    else:
-        current = {"schema_version": 1, "robot": "bb8", "devices": []}
-    name = input(f"Robot name [{current['robot']}]: ").strip() or current["robot"]
-    profile = choose("Robot profile", ["BB-8 spherical robot", "Custom robot"])
-    mode = choose("Starting mode", ["Simulation: working virtual devices", "Plan hardware: drivers not connected yet"])
-    desired = [
-        ("camera", "sensor", "sim-camera", "Raspberry Pi Camera Module 3 Wide NoIR", "picamera2"),
-        ("lidar", "sensor", "sim-tfmini", "TFmini Plus single-beam rangefinder", "tfmini-plus"),
-        ("drive", "motor", "sim-motor", "Hub motor through VESC-compatible controller", "vesc"),
-    ]
-    devices = [dict(device) for device in current["devices"]]
-    for device_name, kind, simulated, label, planned in desired:
-        if any(d["name"] == device_name for d in devices):
-            print(f"Keeping existing device: {device_name}")
-            continue
-        if yes(f"Add {label}?"):
-            device = {"name": device_name, "kind": kind,
-                      "driver": simulated if mode == 0 else planned, "enabled": mode == 0}
-            if mode != 0:
-                device["status"] = "planned; driver unavailable"
-                device["connection"] = input("Planned connection (COM port, CSI, etc.; blank if unknown): ").strip() or None
-            devices.append(device)
-    data = {**current, "robot": name, "profile": "bb8" if profile == 0 else "custom",
-            "mode": "simulation" if mode == 0 else "planning", "devices": devices,
-            "ai_backend": {"status": "not connected"}}
-    print("\nConfiguration review")
-    print(f"Robot: {name} | Mode: {data['mode']} | AI: not connected")
-    for device in devices:
-        print(f"  {device['name']}: {device['driver']} ({'enabled' if device.get('enabled', True) else 'planned'})")
-    if not yes("Save this configuration?"):
-        print("Cancelled. Configuration unchanged.")
+    print('RoboClaw | Robot setup\nInstalled drivers support simulation and read-only ESP32 telemetry. AI is not connected.')
+    current = read(path) if path.exists() else {'schema_version': 1, 'robot': 'bb8', 'devices': []}
+    if path.exists() and not yes(f'Update existing robot {current["robot"]}? Existing devices will be retained'): return
+    name = input(f'Robot name [{current["robot"]}]: ').strip() or current['robot']
+    devices = [dict(d) for d in current['devices']]
+    while yes('Add a device?'):
+        devices.append(select_device(drivers, devices))
+    data = {**current, 'robot': name, 'devices': devices}
+    print('\nConfiguration review')
+    for device in devices: print(f'  {device["name"]}: {device["driver"]}')
+    if not yes('Save this configuration?'):
+        print('Cancelled. Configuration unchanged.')
         return
     save(path, data)
-    print(f"\nSaved {path}")
-    active = {d["name"]: drivers[d["driver"]](d) for d in devices
-              if d.get("enabled", True) and d["driver"] in ("sim-camera", "sim-tfmini", "sim-motor")}
-    if active and yes("Run a simulated sensor check now?"):
-        result = snapshot(active)
-        for name, reading in result["devices"].items():
-            print(f"  {name}: {reading['health']} (simulation)")
-    print("\nSetup complete. Next commands: robot status, robot inspect, robot run")
-    print("Run robot setup again to review configuration; robot configure to add a device.")
+    print(f'Saved {path}\nNext commands: robot ports, robot test DEVICE, robot inspect, robot run')

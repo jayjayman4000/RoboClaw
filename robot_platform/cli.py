@@ -37,15 +37,16 @@ def snapshot(devices):
     for name, driver in devices.items():
         timestamp = datetime.now(timezone.utc).isoformat()
         try:
-            state[name] = {"observed_at": timestamp, "health": "ok", "observation": driver.observe()}
+            observation = driver.observe()
+            state[name] = {"observed_at": timestamp, "health": observation.get("health", "ok"), "observation": observation}
         except Exception as error:
             state[name] = {"observed_at": timestamp, "health": "error", "error": str(error)}
-    return {"simulation": True, "devices": state,
+    return {"simulation": all(getattr(d, "simulation", False) for d in devices.values()), "devices": state,
             "body_pose": None, "head_pose": None}
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Robot platform prototype (simulation only)")
+    parser = argparse.ArgumentParser(description="RoboClaw robot platform")
     parser.add_argument("--config", type=Path, default=Path.home() / ".roboclaw" / "robot.json")
     sub = parser.add_subparsers(dest="verb", required=False)
     init = sub.add_parser("init", help="Create a robot configuration")
@@ -56,6 +57,11 @@ def main(argv=None):
     add.add_argument("kind", choices=["sensor", "motor"])
     add.add_argument("name", nargs="?")
     add.add_argument("--driver")
+    add.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
+    sub.add_parser("ports", help="List serial ports without opening them")
+    test = sub.add_parser("test", help="Test selected ESP32 telemetry connection")
+    test.add_argument("name")
+    test.add_argument("--timeout", type=float, default=5)
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -69,14 +75,19 @@ def main(argv=None):
     command.add_argument("action", choices=["stop", "set_speed"])
     command.add_argument("--value", type=float, default=0)
     args = parser.parse_args(argv)
+    devices = {}
     try:
         drivers = registry()
+        if args.verb == "ports":
+            from .serial_driver import ports
+            emit(ports())
+            return 0
         if args.verb in (None, "setup"):
             from .setup import onboard
             onboard(args.config, read, save, snapshot, drivers)
             return 0
         if args.verb == "drivers":
-            emit({name: {"kind": cls.kind, "simulation": name.startswith("sim-")}
+            emit({name: {"kind": cls.kind, "simulation": getattr(cls, "simulation", False), "fields": getattr(cls, "fields", {})}
                   for name, cls in drivers.items()})
             return 0
         if args.verb == "init":
@@ -87,22 +98,20 @@ def main(argv=None):
             return 0
         config = read(args.config)
         if args.verb in ("add", "configure"):
-            kind = args.kind if args.verb == "add" else input("Device kind (sensor/motor): ").strip()
-            if kind not in ("sensor", "motor"):
-                raise ValueError("Device kind must be sensor or motor")
-            choices = {n: c for n, c in drivers.items() if c.kind == kind}
-            name = getattr(args, "name", None) or input("Device name: ").strip()
-            selected = getattr(args, "driver", None)
-            if not selected:
-                print("Available drivers: " + ", ".join(choices))
-                selected = input("Driver: ").strip()
-            if not name or any(d["name"] == name for d in config["devices"]):
-                raise ValueError("Device name must be nonempty and unique")
-            if selected not in choices:
-                raise ValueError("Unknown driver or driver kind mismatch; run robot drivers")
-            config["devices"].append({"name": name, "kind": kind, "driver": selected})
+            from .setup import select_device
+            supplied = None
+            if args.verb == "add" and args.driver:
+                supplied = {}
+                for option in args.set:
+                    key, sep, value = option.partition("=")
+                    if not sep: raise ValueError("Settings must be KEY=VALUE")
+                    supplied[key] = value
+            device = select_device(drivers, config["devices"],
+                                   getattr(args, "kind", None), getattr(args, "name", None),
+                                   getattr(args, "driver", None), supplied)
+            config["devices"].append(device)
             save(args.config, config)
-            print(f"Added {name} using {selected}")
+            print(f"Added {device['name']} using {device['driver']}")
             return 0
         if args.verb == "remove":
             if not any(d["name"] == args.name for d in config["devices"]):
@@ -113,21 +122,27 @@ def main(argv=None):
         if args.verb == "status":
             emit(config)
             return 0
-        # This starter deliberately refuses external hardware plugins at execution.
-        # Discovery/configuration work now; hardware execution needs a future contract.
-        devices = {}
+        if args.verb == "test":
+            from .serial_driver import connection_test
+            device = next((d for d in config["devices"] if d["name"] == args.name), None)
+            if not device or device["driver"] != "esp32-json" or not device.get("enabled", True):
+                raise ValueError("test requires an enabled esp32-json device")
+            if not 0.1 <= args.timeout <= 60: raise ValueError("timeout must be between 0.1 and 60 seconds")
+            result = connection_test(device, args.timeout)
+            emit(result)
+            return 0 if result["passed"] else 1
+        from .setup import settings
         for device in config["devices"]:
-            if not device.get("enabled", True):
-                continue
-            name = device["driver"]
-            if name not in ("sim-camera", "sim-tfmini", "sim-motor"):
-                raise ValueError("This release executes only built-in simulated drivers")
-            devices[device["name"]] = drivers[name](device)
+            if not device.get("enabled", True): continue
+            cls = drivers[device["driver"]]
+            options = {k: device[k] for k in getattr(cls, "fields", {}) if k in device}
+            devices[device["name"]] = cls({**device, **settings(cls, options, interactive=False)})
         if args.verb == "command":
             if args.name not in devices:
                 raise ValueError("Device not found")
             emit(devices[args.name].command({"action": args.action, "value": args.value}))
-            print("One-shot simulation; command state ends when this process exits.")
+            if getattr(devices[args.name], "simulation", False):
+                print("One-shot simulation; command state ends when this process exits.")
         elif args.verb == "inspect":
             emit(snapshot(devices))
         elif args.verb == "run":
@@ -141,10 +156,14 @@ def main(argv=None):
                     if args.ticks == 0 or tick < args.ticks:
                         time.sleep(args.interval)
             except KeyboardInterrupt:
-                print("Stopped simulation.")
+                print("Stopped observations.")
         return 0
-    except (ValueError, OSError, KeyError, EOFError) as error:
+    except (ValueError, OSError, KeyError, EOFError, ImportError) as error:
         parser.exit(2, f"robot: {error}\n")
+    finally:
+        for driver in devices.values():
+            close = getattr(driver, "close", None)
+            if close: close()
 
 
 if __name__ == "__main__":

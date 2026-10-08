@@ -10,21 +10,27 @@ from importlib.metadata import entry_points
 
 class Driver:
     kind = "sensor"
+    simulation = False
+    fields = {}
     def __init__(self, config):
         self.config = config
     def observe(self):
         raise NotImplementedError
+    def close(self):
+        pass
     def command(self, action):
         raise ValueError("This device does not accept commands")
 
 
 class SimCamera(Driver):
+    simulation = True
     def observe(self):
         return {"source": "simulation", "scene": "A person stands ahead beside a chair",
                 "frame": None, "note": "Synthetic description; no camera image or inference"}
 
 
 class SimRange(Driver):
+    simulation = True
     def observe(self):
         return {"source": "simulation", "distance_m": round(1.5 + .3 * math.sin(time.monotonic()), 3),
                 "measurement": "single beam", "frame_id": self.config["name"],
@@ -32,6 +38,7 @@ class SimRange(Driver):
 
 
 class SimMotor(Driver):
+    simulation = True
     kind = "motor"
     def __init__(self, config):
         super().__init__(config)
@@ -52,7 +59,9 @@ class SimMotor(Driver):
         return {"accepted": True, "simulation_only": True, "commanded_speed": self.speed}
 
 
-BUILTINS = {"sim-camera": SimCamera, "sim-tfmini": SimRange, "sim-motor": SimMotor}
+from .serial_driver import SerialTelemetry
+
+BUILTINS = {"esp32-json": SerialTelemetry, "sim-camera": SimCamera, "sim-tfmini": SimRange, "sim-motor": SimMotor}
 
 
 def registry():
@@ -60,5 +69,8 @@ def registry():
     for entry in entry_points(group="robot_platform.drivers"):
         if entry.name in result:
             raise ValueError(f"Duplicate driver: {entry.name}")
-        result[entry.name] = entry.load()
+        cls = entry.load()
+        if getattr(cls, "kind", None) not in ("sensor", "motor") or not callable(getattr(cls, "observe", None)):
+            raise ValueError(f"Invalid driver contract: {entry.name}")
+        result[entry.name] = cls
     return result

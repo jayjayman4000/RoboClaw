@@ -1,8 +1,8 @@
 # RoboClaw
 
-Terminal-first robot platform prototype. Python 3.10+ and Git required.
+Terminal-first robot platform. Python 3.10+ and Git required.
 
-## Install and start guided setup
+## Install
 
 ```bash
 git clone https://github.com/jayjayman4000/RoboClaw.git
@@ -10,93 +10,98 @@ cd RoboClaw
 python install.py
 ```
 
-On Windows, use `py install.py` if `python` is unavailable.
-The installer creates an isolated environment, installs RoboClaw, and starts the
-terminal wizard. Choose a robot profile, simulation or hardware planning, and
-sensors/motors; review and save; then run a simulated check.
-No API key is requested: the AI backend is not implemented yet.
+Windows: `py install.py`. The installer creates an isolated environment, installs
+RoboClaw and opens terminal setup. Accept the Windows PATH update and restart your
+terminal. Linux/macOS: follow the printed PATH instructions. Keep the checkout in
+place; installation links to its source. Update with `git pull`, then rerun the
+installer. Existing configurations are retained.
 
-On Windows, accept the user PATH update, then restart your terminal application.
-On Linux/macOS the installer prints a PATH line to add to your shell profile.
-Afterward `robot` and `roboclaw` are available:
+Setup lists installed drivers, asks for a device name and driver-specific settings,
+and saves only after review. Repeat to add more devices. Existing devices are kept.
+`robot configure` adds one device. AI is not connected yet.
+
+## Connect your existing ESP32 body firmware
+
+Plug the **body** ESP32 into USB and close Arduino Serial Monitor or other programs
+using that port. The head sends LiDAR measurements to the body over ESP-NOW.
+
+```bash
+robot ports
+robot configure
+```
+
+Choose `esp32-json`, name it `head_range`, enter the body port (e.g. `COM3` on
+Windows or `/dev/ttyACM0` on Linux), and accept 115200 baud and the 1-second stale
+threshold. Or add it explicitly:
+
+```bash
+robot add sensor head_range --driver esp32-json --set port=COM3
+robot test head_range --timeout 10
+robot run --interval 0.1
+```
+
+Port discovery does not open every port or identify firmware from USB IDs. The
+connection test opens only the selected port and succeeds on recognized telemetry,
+not on the mere presence of an ESP32. Some boards reset when their serial port is
+opened; use a longer test timeout if necessary. This adapter sends no commands.
+
+Current BodyModule4 output works without reflashing. Distance is converted from cm
+to meters. Signal strength, sensor validity and sample age are **unknown** with that
+firmware. Its health is `unverified` even while USB telemetry arrives because the
+head can retransmit old measurements. Do not use this state to authorize motion.
+See [firmware review](docs/firmware-review.md) and [telemetry protocol](docs/telemetry.md).
+
+## State and connection handling
+
+`robot inspect` polls once; freshly opened hardware may report `waiting`.
+`robot run` keeps drivers open, streams state, and closes them on Ctrl+C.
+Disconnected serial devices retry every 2 seconds. A successful reconnect clears
+previous readings. Historical values may appear while disconnected or stale, with
+`usable: false`. No range readings are fabricated.
+
+Health: `waiting` (open, no telemetry), `disconnected`, `unverified` (legacy
+firmware), `invalid` (v1 reports failure), `stale`, or `ok`. `received_at` is UTC host
+receipt time; `received_age_s` uses a monotonic clock. `observed_at` is polling time,
+not capture time. Body/head pose and head orientation remain unknown. Malformed
+lines and unrelated boot/WiFi messages are counted; partial lines are buffered.
 
 ```bash
 robot setup
+robot drivers
 robot status
 robot inspect
-robot run --ticks 5
-```
-
-Running `robot` without arguments opens setup. Configuration defaults to
-`~/.roboclaw/robot.json`, independent of your terminal's working directory.
-Use `robot --config PATH setup` for another configuration. Existing devices are
-retained; declining the final save leaves your configuration unchanged.
-
-## Update an existing checkout
-
-```bash
-git pull
-python install.py
-```
-
-Your old `robot.json` is not deleted or automatically imported. To update it
-explicitly, run `robot --config robot.json setup` in its directory.
-Keep the cloned folder in place: installation is linked to its source.
-
-Hardware planning records disabled device placeholders. It does not connect real
-motors/cameras or test them. Simulation checks exercise synthetic observations.
-
-## Commands
-
-`robot configure` interactively asks for device kind, name, and driver.
-`robot drivers` lists registered plugins. `robot remove NAME` removes a configured
-device. `robot --config PATH ...` selects another robot configuration; the global
-option goes before the subcommand. Existing configurations are not overwritten.
-
-```bash
+robot remove DEVICE
 robot command drive set_speed --value 0.2
 robot command drive stop
-robot inspect
 ```
 
-Commands are one-shot demonstrations. They do not control a running `robot run`
-process and do not persist motor speed. Speed is normalized, not meters/second.
+Motor commands currently work with the simulated motor only and last for one
+process. The ESP32 driver is read-only. Simulation camera scenes are synthetic,
+not captured images. No motor controller, camera capture, AI or sensor fusion is
+implemented. Run `robot` with no arguments to open setup. Configuration defaults
+to `~/.roboclaw/robot.json`; use `robot --config PATH ...` to select another file.
+Previously configured disabled hardware placeholders remain disabled.
 
-## What you should see
+## Driver plugins
 
-State output includes UTC observation timestamps, per-device health, a synthetic
-camera scene, and a varying single-beam distance. Camera `frame` is null: this is
-not image capture or visual inference. Body and head pose remain unknown. A range
-reading is not assigned to a person or chair in the synthetic camera scene.
-
-## Scope
-
-This is the CLI and device-contract prototype, not a finished autonomy platform.
-It has no AI backend, actual camera frames, TFmini serial parser, ESP32 firmware,
-motor-controller connection, synchronized sensor fusion, or network service.
-The hardware list remains Pi 4, ESP32-S3s, TFmini Plus, and ordered Camera Module 3
-Wide NoIR. Head angle feedback is not assumed available.
-
-Next: implement a recorded-image/camera adapter, TFmini transport and parser,
-freshness rules and record/replay, then a read-only model adapter. Select RAI/OM1
-integration after exercising these contracts; this prototype does not replace ROS
-or make a claim to hardware-independent autonomy.
-
-## Plugin contract
-
-Built-in drivers live in `robot_platform/drivers.py`. A driver takes a device
-configuration, declares `kind`, and supplies `observe()` and optionally
-`command(action)`. An installable extension can advertise its class using:
+Install trusted plugin packages into RoboClaw's `.venv`, then restart the CLI.
+Their drivers automatically appear in setup:
 
 ```toml
 [project.entry-points."robot_platform.drivers"]
-my-driver = "my_package:MyDriver"
+my-range = "my_package:MyRange"
 ```
 
-External plugins can be discovered and added to configuration, but this release
-only executes the three built-in simulation drivers. Hardware plugins need a
-proper lifecycle, timeout, units, calibration, and command/result contract first.
-Install only plugins you trust: entry-point discovery imports their code.
+A driver class accepts the device configuration, declares `kind` (`sensor` or
+`motor`), `simulation` (defaults to false for external drivers), and optionally
+`label` and `fields`. `observe()` returns a JSON-serializable dict with observations
+and optionally `health`. `close()` releases resources; it is called on exit.
+`command(action)` is optional. Configuration fields use `type` (`str`, `int`,
+`float`), `required`, `default`, `min` and `max`; see `SerialTelemetry.fields`.
+Drivers must keep observations bounded and handle their transport timeouts.
+Plugin discovery imports installed code; it is not a sandbox. An adapter's own
+commands determine hardware behavior. This release does not provide an actuator
+safety contract or isolation for blocking third-party drivers.
 
 ## Verification
 

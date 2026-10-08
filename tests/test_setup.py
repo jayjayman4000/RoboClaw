@@ -16,19 +16,16 @@ class SetupTest(unittest.TestCase):
     def test_onboarding_and_cancel_preserves_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'robot.json'
-            self.invoke(path, ['', '', '', '', '', '', '', ''])
+            self.invoke(path, ['', 'y', '3', 'lidar', 'n', 'y'])
             data = json.loads(path.read_text())
-            self.assertEqual(len(data['devices']), 3)
+            self.assertEqual(len(data['devices']), 1)
             original = path.read_bytes()
-            self.invoke(path, ['', 'changed', '', '', 'n'])
+            self.invoke(path, ['y', 'changed', 'n', 'n'])
             self.assertEqual(path.read_bytes(), original)
 
-    def test_hardware_is_disabled(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'robot.json'
-            self.invoke(path, ['', '', '2', '', 'CSI', '', 'COM3', '', 'COM4', ''])
-            data = json.loads(path.read_text())
-            self.assertTrue(all(not d['enabled'] for d in data['devices']))
-            with contextlib.redirect_stdout(io.StringIO()) as output:
-                main(['--config', str(path), 'inspect'])
-            self.assertEqual(json.loads(output.getvalue())['devices'], {})
+    def test_installed_plugin_appears_in_menu(self):
+        from robot_platform.drivers import SimRange
+        from robot_platform.setup import select_device
+        with patch('builtins.input', side_effect=['1', 'custom_range']):
+            device = select_device({'third-party-range': SimRange}, [])
+        self.assertEqual(device['driver'], 'third-party-range')
