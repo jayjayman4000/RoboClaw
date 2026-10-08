@@ -444,3 +444,17 @@ systemctl --user start roboclaw-monitor.service
 ```
 
 The service does not inherit API keys exported in a separate terminal. If using a hosted provider, configure its key in the user service environment before starting it; never commit keys to the unit or repository. Tailscale must already be installed, signed in and allowed to connect on both hosts; the monitor never installs software, changes firewall rules or authenticates unattended. Windows can run `robot watch` directly; generated systemd units target Linux only.
+
+### Add a head light sensor and illumination output
+
+For the bare photoresistor on GPIO1 and test LED on GPIO5, use the [BB8-v2.2 firmware and wiring guide](firmware/BB8-v2.2/README.md). Flash its HeadModule6 and BodyModule6 sketches; then run `robot hardware setup BodyModule`. This detects firmware-supported features, offers enable/disable choices and saves them into the existing bridge configuration. Normal robot setup also offers feature detection for BB8 bridges.
+
+```powershell
+robot light BodyModule
+robot illumination BodyModule on
+robot illumination BodyModule off
+robot capabilities list
+robot chat --device BodyModule --debug
+```
+
+The light percentage is relative ADC scale, not calibrated lux. `light_usable` evaluates its freshness independently of LiDAR. `illumination_state_usable` marks fresh reported GPIO state; acknowledgment confirms head processing, not physical light output. New AI action `set_illumination` honors global/per-device permissions and the same one-output-per-turn bound as buzzer control. No automatic dark-triggered output is enabled. Existing v2.1 installations continue to support LiDAR and buzzer; light/illumination stay unavailable until firmware advertises them and you enable the extensions.
