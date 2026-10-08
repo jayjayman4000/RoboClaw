@@ -299,9 +299,30 @@ a previously valid range cannot be reused as usable after timeout/disconnection.
 Responses are not synchronized capture-time perception or a guarantee of physical
 safety. The head ACK reports firmware processing, not independent playback proof.
 
-HTTP calls have a 60-second timeout. If local inference exceeds it, chat reports
+Inference calls default to a 180-second timeout, configurable with --timeout (10–600 seconds). If local inference exceeds it, chat reports
 an error without automatically retrying an action. First model loading can be slow.
 Chat transcripts are not saved; robot configuration stores only backend settings.
 
 References: [Ollama chat API](https://docs.ollama.com/api/chat),
 [tool calling](https://docs.ollama.com/capabilities/tool-calling).
+
+### Slow local inference
+
+Setup metadata calls succeeding while chat times out means the local server may
+be reachable but generation/loading is too slow for the deadline. Version 0.5.1
+distinguishes connection refusal from timeout, requests shorter replies with a
+4096-token context, and adds Qwen3's /no_think soft hint alongside think:false.
+This hint does not guarantee the model stops reasoning. Leaked think-tag preambles
+are removed from displayed final content.
+
+```powershell
+git pull --ff-only
+.\.venv\Scripts\robot.exe ai test --timeout 300
+.\.venv\Scripts\robot.exe chat --device BodyModule --debug --timeout 300
+```
+
+No setup repeat is needed to use the new default. To persist a different limit:
+`robot ai setup --timeout 300`. If generation is still too slow, inspect Ollama's
+loaded models with `ollama ps` and its version with `ollama --version`; model
+size, CPU/GPU use, available memory and template/version behavior need checking.
+No hardware command runs until an actual valid tool request is received.
