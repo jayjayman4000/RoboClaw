@@ -34,7 +34,7 @@ class AIBackendTest(unittest.TestCase):
     def test_setup_saves_remote_and_preserves_devices(self):
         saved=[];config={'devices':[{'name':'BodyModule'}]}
         with patch.object(OllamaBackend,'check',return_value={'provider':'ollama','mode':'remote'}),patch('builtins.input',return_value='y'),redirect_stdout(StringIO()):
-            self.assertTrue(configure_ai('unused',config,lambda p,c:saved.append(c),'http://100.111.212.1:11434','test',mode='remote'))
+            self.assertTrue(configure_ai('unused',config,lambda p,c:saved.append(c),'http://100.111.212.1:11434','test',mode='remote',network='direct'))
         self.assertEqual(saved[0]['devices'],config['devices'])
         self.assertEqual(saved[0]['ai_backend']['mode'],'remote')
     def test_api_setup_probe_never_dispatches_hardware_or_saves_key(self):
