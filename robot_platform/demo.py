@@ -67,3 +67,21 @@ def run_demo():
         yield state("legacy firmware; freshness unverified")
     finally:
         driver.close()
+
+
+def discovery_demo():
+    port = VirtualPort()
+    port.data = json.dumps({
+        "type": "hello", "protocol_version": 1, "controller_id": "demo-body",
+        "name": "BB8 body bridge", "firmware_version": "0.4.0-demo",
+        "capabilities": [
+            {"id": "head_range", "kind": "sensor", "driver": "tfmini-plus", "units": "m"},
+            {"id": "future_ring", "kind": "output", "driver": "neopixel", "units": "rgb"}]}).encode() + b"\n"
+    driver = SerialTelemetry({"port": "offline-demo"}, serial_factory=lambda *a, **k: port)
+    try:
+        observation = driver.observe()
+        return {"discovered": observation['controller'] is not None, "simulation": True,
+                "source": "simulation", "controller": observation['controller'],
+                "note": "Future ring illustrates an unsupported advertisement; no LED driver or command execution."}
+    finally:
+        driver.close()

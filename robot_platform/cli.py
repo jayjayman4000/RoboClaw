@@ -50,6 +50,11 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, default=Path.home() / ".roboclaw" / "robot.json")
     sub = parser.add_subparsers(dest="verb", required=False)
     demo = sub.add_parser("demo", help="Exercise the ESP32 parser offline; no saved configuration or hardware used")
+    discovery = sub.add_parser("discover", help="Read controller identity from one selected port or offline demo")
+    discovery.add_argument("--port")
+    discovery.add_argument("--demo", action="store_true")
+    discovery.add_argument("--timeout", type=float, default=5)
+    discovery.add_argument("--save-as", help="Configure discovered capabilities and save a named bridge")
     demo.add_argument("--interval", type=float, default=0.5)
     init = sub.add_parser("init", help="Create a robot configuration")
     init.add_argument("name")
@@ -79,6 +84,31 @@ def main(argv=None):
     args = parser.parse_args(argv)
     devices = {}
     try:
+        if args.verb == "discover":
+            from .discovery import discover
+            from .demo import discovery_demo
+            from .setup import apply_discovery, normalize_windows_port, check_connection_unique
+            if bool(args.port) == bool(args.demo):
+                raise ValueError("Choose exactly one of --port PORT or --demo")
+            if not 0.1 <= args.timeout <= 60:
+                raise ValueError("timeout must be between 0.1 and 60 seconds")
+            if args.demo and args.save_as:
+                raise ValueError("Demo identity cannot be saved as hardware")
+            port = normalize_windows_port(args.port) if args.port and os.name == "nt" else args.port
+            result = discovery_demo() if args.demo else discover({"port": port}, args.timeout)
+            emit(result)
+            if args.save_as and result["discovered"]:
+                config = read(args.config)
+                if not args.save_as.strip() or any(d["name"] == args.save_as for d in config["devices"]):
+                    raise ValueError("Device name must be nonempty and unique")
+                check_connection_unique(config["devices"], {"port": port})
+                device = apply_discovery({"name": args.save_as, "kind": "sensor", "driver": "esp32-json",
+                                          "enabled": True, "port": port, "baud": 115200}, result["controller"])
+                from .setup import yes
+                if yes("Save discovered device?"):
+                    config["devices"].append(device)
+                    save(args.config, config)
+            return 0 if result["discovered"] else 1
         if args.verb == "demo":
             from .demo import run_demo
             if not .05 <= args.interval <= 60:

@@ -30,6 +30,7 @@ class SerialTelemetry:
         self.config, self.factory, self.clock = config, serial_factory, clock
         self.serial = None
         self.buffer = bytearray()
+        self.controller = None
         self.latest = None
         self.received = None
         self.received_at = None
@@ -41,6 +42,10 @@ class SerialTelemetry:
     def _accept(self, line):
         try:
             data = json.loads(line)
+            if isinstance(data, dict) and data.get("type") == "hello":
+                from .discovery import validate_manifest
+                self.controller = validate_manifest(data)
+                return
             if not isinstance(data, dict) or data.get("type") != "telemetry":
                 self.ignored += 1
                 return
@@ -57,8 +62,16 @@ class SerialTelemetry:
             if version == 1:
                 if type(valid) is not bool or not numeric(age) or age < 0:
                     raise ValueError("v1 requires valid and sample_age_ms")
+            link, sequence = data.get("head_link_valid"), data.get("sample_sequence")
+            if link is not None and type(link) is not bool:
+                raise ValueError("Invalid head link flag")
+            if sequence is not None and (type(sequence) is not int or not 0 <= sequence <= 0xffffffff):
+                raise ValueError("Invalid sample sequence")
+            if version == 1 and link is False:
+                valid = False
             self.latest = {"source": "hardware", "protocol_version": version,
                            "distance_m": None if distance is None else distance / 100, "strength": strength,
+                           "head_link_valid": link, "sample_sequence": sequence,
                            "valid": valid if version == 1 else None,
                            "sample_age_ms": age if version == 1 else None,
                            "obstacle_reported": data.get("brake"), "measurement": "single beam",
@@ -79,6 +92,7 @@ class SerialTelemetry:
                 self.error = None
                 self.buffer.clear()
                 self.latest = self.received = self.received_at = None
+                self.controller = None
             except Exception as error:
                 self.error = str(error)
         if self.serial is not None:
@@ -112,7 +126,17 @@ class SerialTelemetry:
             health = "invalid" if not self.latest["valid"] else ("stale" if sensor_age > limit else "ok")
         else:
             health = "unverified"
+        expected = self.config.get("controller", {}).get("controller_id")
+        if expected and self.controller and self.controller["controller_id"] != expected:
+            health = "identity_mismatch"
+        selected = self.config.get("enabled_capabilities")
+        if selected is not None and (self.controller is None or not any(
+                c["id"] in selected and c["host_supported"] for c in self.controller["capabilities"])):
+            if health not in ("disconnected", "waiting"):
+                health = "disabled"
         return {**(self.latest or {"source": "hardware", "distance_m": None, "strength": None}),
+                "controller": self.controller,
+                "enabled_capabilities": self.config.get("enabled_capabilities"),
                 "health": health, "connection": "connected" if self.serial else "disconnected",
                 "received_at": self.received_at, "received_age_s": age_s,
                 "timestamp_basis": "host receipt; not sensor capture time",

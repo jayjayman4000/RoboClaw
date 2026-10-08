@@ -77,7 +77,16 @@ def select_device(drivers, devices, kind=None, name=None, selected=None, supplie
             print('  No ports detected. Check USB connection/cable and Device Manager. You can enter a port manually.')
         print('Enter the full port name, e.g. COM4 on Windows or /dev/ttyACM0 on Linux.')
     options = settings(cls, supplied, interactive=supplied is None)
-    return {'name': name, 'kind': cls.kind, 'driver': selected, 'enabled': True, **options}
+    check_connection_unique(devices, options)
+    device = {'name': name, 'kind': cls.kind, 'driver': selected, 'enabled': True, **options}
+    if selected == 'esp32-json' and supplied is None and yes('Discover controller identity now? Skip when unplugged'):
+        from .discovery import discover
+        result = discover(device)
+        if result['discovered']:
+            apply_discovery(device, result['controller'])
+        else:
+            print(result['note'])
+    return device
 
 
 def onboard(path, read, save, snapshot, drivers):
@@ -96,3 +105,31 @@ def onboard(path, read, save, snapshot, drivers):
         return
     save(path, data)
     print(f'Saved {path}\nNext commands: robot ports, robot test DEVICE, robot inspect, robot run')
+
+
+def apply_discovery(device, controller):
+    print(f"Controller: {controller['name']} | firmware {controller['firmware_version']}")
+    enabled = []
+    for capability in controller['capabilities']:
+        label = f"{capability['id']}: {capability['driver']} ({capability['units']})"
+        if capability['host_supported']:
+            if yes('Enable ' + label + '?'):
+                enabled.append(capability['id'])
+        else:
+            print('  ' + label + ' — advertised, host support unavailable')
+    device['controller'] = controller
+    device['enabled_capabilities'] = enabled
+    return device
+
+
+def check_connection_unique(devices, device):
+    port = device.get('port')
+    if not port:
+        return
+    for existing in devices:
+        old_port = existing.get('port')
+        if not existing.get('enabled', True) or not old_port:
+            continue
+        same = normalize_windows_port(old_port).casefold() == normalize_windows_port(port).casefold() if os.name == 'nt' else old_port == port
+        if same:
+            raise ValueError(f"Port {port} already belongs to {existing['name']}; remove that bridge before adding another")

@@ -13,8 +13,8 @@ Legacy body output:
 prove the head is getting new readings. Valid positive distances through 1200 cm
 are accepted; impossible/initial zero readings are rejected.
 
-Proposed v1 host output, supported by the adapter but **not yet implemented in the
-supplied firmware**:
+v1 host output is supported by the adapter and new telemetry prototypes in
+firmware/. Original supplied firmware remains legacy:
 
 ```json
 {"type":"telemetry","protocol_version":1,"distance_cm":123,"strength":250,"valid":true,"sample_age_ms":35,"brake":false}
@@ -36,3 +36,19 @@ control contract. This v1 format is a host boundary, not an ESP-NOW wire format.
 
 Threshold defaults to 1 second and is configurable. All invalid, stale,
 unverified, waiting or disconnected observations have `usable: false`.
+
+## Controller identity
+
+Firmware emits hello once per second without a host command or reset.
+
+```json
+{"type":"hello","protocol_version":1,"controller_id":"AA:BB:CC:DD:EE:FF","name":"BB8 body bridge","firmware_version":"0.4.0-prototype","capabilities":[{"id":"head_range","kind":"sensor","driver":"tfmini-plus","units":"m"}]}
+```
+
+Controller IDs must be stable and capability IDs unique. Advertise only implemented
+capabilities; physical presence and measurement validity are runtime states. Host
+adds host_supported and commands_enabled; advertisements cannot override them.
+Hello does not change telemetry receipt time, sample age or validity. Reconnection
+clears identity. Messages are bounded to 4096 bytes. Other controller adapters may
+translate their own protocols through validate_manifest; they need not use ESP32
+firmware. This bridge supports one TFmini range channel.
