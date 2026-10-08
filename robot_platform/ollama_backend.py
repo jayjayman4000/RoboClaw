@@ -5,21 +5,23 @@ import urllib.error
 from urllib.parse import urlparse
 
 
-def local_endpoint(value):
+def local_endpoint(value, remote=False):
     parsed = urlparse(value)
-    if parsed.scheme not in ('http', 'https') or parsed.hostname not in ('localhost', '127.0.0.1', '::1') or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
+    if parsed.scheme not in ('http', 'https') or (not parsed.hostname or (not remote and parsed.hostname not in ('localhost', '127.0.0.1', '::1'))) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
         raise ValueError('Use a local Ollama endpoint such as http://localhost:11434')
+    parsed.port  # Validate the port before issuing a request.
     return value.rstrip('/')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError('Local Ollama redirects are not supported')
+        raise ValueError('AI endpoint redirects are not supported')
 
 
 class OllamaBackend:
-    def __init__(self, endpoint='http://localhost:11434', model=None, timeout_s=180):
-        self.endpoint = local_endpoint(endpoint)
+    def __init__(self, endpoint='http://localhost:11434', model=None, timeout_s=180, remote=False):
+        self.endpoint = local_endpoint(endpoint, remote)
+        self.remote = remote
         self.model = model
         if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or not 10 <= timeout_s <= 600:
             raise ValueError("AI timeout must be between 10 and 600 seconds")
@@ -44,9 +46,9 @@ class OllamaBackend:
         except urllib.error.URLError as error:
             if isinstance(error.reason, TimeoutError):
                 raise ValueError(f'Ollama response exceeded {timeout} seconds. Use --timeout 300 or a smaller tool-capable model.') from error
-            raise ValueError('Cannot connect to local Ollama. Check that Ollama is running and the endpoint is correct.') from error
+            raise ValueError('Cannot connect to Ollama. Check the endpoint, listening address, Tailscale access and firewall.') from error
         except OSError as error:
-            raise ValueError('Local Ollama connection failed: ' + str(error)) from error
+            raise ValueError('Ollama connection failed: ' + str(error)) from error
 
     def models(self):
         values=self.request('/api/tags',timeout=5).get('models',[])
@@ -62,7 +64,7 @@ class OllamaBackend:
         capabilities = metadata.get('capabilities', [])
         if not isinstance(capabilities, list) or 'tools' not in capabilities:
             raise ValueError('Selected model does not report tool support; choose a tool-capable model')
-        return {'provider':'ollama','endpoint':self.endpoint,'model':self.model,'status':'configured','tool_support':True,'timeout_s':self.timeout_s}
+        return {'provider':'ollama','endpoint':self.endpoint,'model':self.model,'status':'configured','tool_support':True,'timeout_s':self.timeout_s,'mode':'remote' if self.remote else 'local'}
 
     def complete(self,messages,tools):
         messages = [dict(m) for m in messages]
@@ -89,22 +91,6 @@ class OllamaBackend:
 
 
 def configure_ai(path,config,save,endpoint=None,model=None,timeout_s=None):
-    from .setup import choose,yes
-    old=config.get('ai_backend',{})
-    print('RoboClaw | Local AI setup (Ollama)')
-    endpoint=endpoint or (input(f"Ollama endpoint [{old.get('endpoint','http://localhost:11434')}]: ").strip() or old.get('endpoint','http://localhost:11434'))
-    backend=OllamaBackend(endpoint,model,timeout_s if timeout_s is not None else old.get("timeout_s",180))
-    if model is None:
-        names=backend.models()
-        if not names:
-            print('No local models found. Download one with: ollama pull qwen3:4b')
-            return False
-        backend.model=names[choose('Installed local models',names)]
-    settings=backend.check()
-    print(f"Model: {backend.model} | endpoint: {backend.endpoint} | tool support: yes")
-    if not yes('Save AI configuration?'):
-        print('Cancelled. Configuration unchanged.')
-        return False
-    save(path,{**config,'ai_backend':settings})
-    print('Saved. Next: robot chat --device BodyModule --debug')
-    return True
+    """Backward-compatible local setup entry point."""
+    from .ai_backend import configure_ai as configure
+    return configure(path,config,save,endpoint,model,timeout_s,mode='local')
