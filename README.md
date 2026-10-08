@@ -402,3 +402,45 @@ robot capabilities enable read_robot_state
 Restart chat after changing saved permissions. `/tools` shows effective AI tools and `/capabilities` shows the session's policy. Disabled tools are excluded from the model request and rejected again at dispatch, even if the model invents a call. Sensor permissions filter observations by device; when only some devices are allowed, aggregate pose fields are withheld. These permissions govern AI tools: manual `robot mood`, `/state`, `robot inspect` and local telemetry polling stay available. Previous chat history is not reused between chat sessions; permissions do not remove data already sent to a provider.
 
 Policy is stored in `ai_capabilities.actions` and `ai_capabilities.devices` in robot.json. Capability changes preserve AI connection settings and hardware configuration. A central action registry in `robot_platform/capabilities.py` defines action descriptions, driver requirements and policy resolution for both the CLI and AI dispatcher. Future hardware actions must add a registry entry, tool schema and validated handler.
+
+### Connection recovery and unattended monitoring
+
+`robot watch` runs without interactive input, using saved configuration. It continuously polls hardware, checks AI endpoint/model metadata in a separate thread, and emits full JSON snapshots with health transition events. By default it selects enabled hardware devices and skips simulated devices, as chat does. It never generates AI responses, forwards sensor data to a provider, or sends hardware commands. Reachable metadata does not prove inference speed or successful tool execution.
+
+```powershell
+robot watch --device BodyModule
+# Finite run and optional latest-status file:
+robot watch --device BodyModule --ticks 10 --state-file runtime-health.json
+```
+
+Stop with Ctrl+C. On Linux, SIGTERM also closes the monitor cleanly. AI checks start immediately, normally repeat every 15 seconds, and back off after failures up to 300 seconds; successful recovery resets the interval. Use `--ai-interval 5` for a faster bench test. Hardware polling continues during slow/unavailable AI checks. A missing AI configuration is reported as `not_configured`, and does not prevent hardware monitoring. Transition events distinguish states such as waiting, stale, disconnected and recovered; stale sensor data is never marked usable just because USB is connected.
+
+The serial driver retries the configured port after disconnect, clears the old reading on reconnect, and waits for fresh telemetry. If the operating system assigns a different port, update device configuration; RoboClaw does not guess a replacement. The optional status file is replaced atomically and cannot use the robot configuration path. Permissions still govern chat tools; the monitor is a local diagnostic, and does not expose disabled sensor observations to AI.
+
+Chat also has `/health` for current hardware and background AI status. It can start while a previously configured AI endpoint is offline. After connectivity returns, submit a new user message; failed turns are not retried automatically, and no buzzer action is replayed. If a command was acknowledged before a later model-response failure, its printed outcome remains authoritative.
+
+### Raspberry Pi startup service
+
+Install RoboClaw and configure devices/AI on the Pi first. Keep the virtual environment in a stable path, and configure the Pi's actual serial path rather than copying COM4 from Windows. Where available, a `/dev/serial/by-id/...` path is preferable for reconnecting the same USB board. The service runs as your normal user, which must have permission to open that serial device.
+
+Generate the user service **on the Pi from its virtual environment** so the Python and configuration paths match that machine:
+
+```bash
+.venv/bin/robot service --device BodyModule --output "$HOME/.config/systemd/user/roboclaw-monitor.service"
+systemctl --user daemon-reload
+systemctl --user enable --now roboclaw-monitor.service
+journalctl --user -u roboclaw-monitor.service -f
+```
+
+The generator refuses to overwrite an existing unit and does not enable it implicitly. To regenerate, stop the service and move the old unit aside before generating another. The unit starts the read-only monitor, restarts after process failure, and has no interactive setup or login prompts. It can start before the remote model PC is online and recover later. To start the user service at boot and keep it running after logout, enable user lingering using `sudo loginctl enable-linger "$USER"`. See [systemd user lingering](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html) and [service restart behavior](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html).
+
+Only one process should own the serial port. Stop the monitor before using chat, mood, inspect or another serial session:
+
+```bash
+systemctl --user stop roboclaw-monitor.service
+.venv/bin/robot chat --device BodyModule --debug
+# After leaving chat:
+systemctl --user start roboclaw-monitor.service
+```
+
+The service does not inherit API keys exported in a separate terminal. If using a hosted provider, configure its key in the user service environment before starting it; never commit keys to the unit or repository. Tailscale must already be installed, signed in and allowed to connect on both hosts; the monitor never installs software, changes firewall rules or authenticates unattended. Windows can run `robot watch` directly; generated systemd units target Linux only.

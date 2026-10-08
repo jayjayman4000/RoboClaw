@@ -92,6 +92,10 @@ class APIBackend(OllamaBackend):
 
 def backend_from_settings(settings, timeout_s=None):
     timeout = timeout_s if timeout_s is not None else settings.get('timeout_s',180)
+    if settings.get("provider") in ("ollama", "openai-compatible"):
+        model=settings.get("model")
+        if not isinstance(model,str) or not model.strip():raise ValueError("Configure an AI model with robot ai setup first")
+        if settings["provider"] == "ollama" and ":cloud" in model:raise ValueError("Choose a downloaded Ollama model")
     if settings.get('provider') == 'ollama':
         return OllamaBackend(settings.get('endpoint','http://localhost:11434'),settings.get('model'),timeout,settings.get('mode','local')=='remote')
     if settings.get('provider') == 'openai-compatible':

@@ -112,6 +112,15 @@ def main(argv=None):
     run.add_argument("--device", action="append", default=[], help="Observe only named devices")
     run.add_argument("--ticks", type=int, default=0)
     run.add_argument("--interval", type=float, default=1.0)
+    watch_parser = sub.add_parser("watch", help="Read-only hardware and AI health monitor; no interactive input")
+    watch_parser.add_argument("--device", action="append", default=[])
+    watch_parser.add_argument("--ticks", type=int, default=0)
+    watch_parser.add_argument("--interval", type=float, default=1)
+    watch_parser.add_argument("--ai-interval", type=float, default=15)
+    watch_parser.add_argument("--state-file", type=Path)
+    service_parser = sub.add_parser("service", help="Generate a Linux user systemd monitor service")
+    service_parser.add_argument("--device", action="append", default=[])
+    service_parser.add_argument("--output", type=Path)
     command = sub.add_parser("command", help="Send one simulated motor command")
     command.add_argument("name")
     command.add_argument("action", choices=["stop", "set_speed"])
@@ -248,6 +257,20 @@ def main(argv=None):
             result = connection_test(device, args.timeout, require_fresh=args.require_fresh)
             emit(result)
             return 0 if result["passed"] else 1
+        if args.verb == "service":
+            from .service import unit
+            enabled = {d['name'] for d in config['devices'] if d.get('enabled',True)}
+            if set(args.device)-enabled:raise ValueError('Selected device does not exist or is disabled')
+            content = unit(args.config,args.device)
+            if args.output:
+                if args.output.resolve() == args.config.resolve():raise ValueError('Service output cannot overwrite robot configuration')
+                args.output.parent.mkdir(parents=True,exist_ok=True)
+                with args.output.open('x',encoding='utf-8') as stream:stream.write(content)
+                print(f'Generated {args.output}; see README for systemctl startup instructions.')
+            else:print(content,end='')
+            return 0
+        if args.verb == "watch" and args.state_file and args.state_file.resolve() == args.config.resolve():
+            raise ValueError('State file cannot overwrite robot configuration')
         from .setup import settings
         selected = getattr(args, "device", [])
         if selected and set(selected) - {d["name"] for d in config["devices"] if d.get("enabled", True)}:
@@ -257,9 +280,12 @@ def main(argv=None):
             if not device.get("enabled", True): continue
             cls = drivers[device["driver"]]
             options = {k: device[k] for k in getattr(cls, "fields", {}) if k in device}
-            if args.verb == "chat" and not selected and getattr(cls, "simulation", False): continue
+            if args.verb in ("chat", "watch") and not selected and getattr(cls, "simulation", False): continue
             devices[device["name"]] = cls({**device, **settings(cls, options, interactive=False)})
-        if args.verb == "chat":
+        if args.verb == "watch":
+            from .monitor import watch
+            watch(config,devices,snapshot,emit,args.interval,args.ai_interval,args.ticks,args.state_file,save)
+        elif args.verb == "chat":
             from .agent import chat
             chat(config, devices, snapshot, args.debug, args.timeout)
         elif args.verb == "command":
