@@ -326,3 +326,46 @@ No setup repeat is needed to use the new default. To persist a different limit:
 loaded models with `ollama ps` and its version with `ollama --version`; model
 size, CPU/GPU use, available memory and template/version behavior need checking.
 No hardware command runs until an actual valid tool request is received.
+
+### Choose local, remote or hosted AI
+
+`robot setup` offers AI configuration after saving devices. Run `robot ai setup` anytime and choose local Ollama, remote Ollama (Tailscale/LAN), or a hosted OpenAI-compatible Chat Completions API. Hardware stays on the computer running RoboClaw. Existing local configurations remain supported. Setup checks Ollama model tool support; hosted setup makes one small inference request to probe tools without executing hardware actions (provider charges may apply).
+
+Remote example, from the laptop or robot computer:
+
+```powershell
+robot ai doctor --mode remote --endpoint http://100.111.212.1:11434
+robot ai setup --mode remote --endpoint http://100.111.212.1:11434
+robot ai test --timeout 300
+robot chat --device BodyModule --debug --timeout 300
+```
+
+`ai doctor` reports DNS, TCP and API checks without inference, serial access or configuration changes. It works before AI setup has succeeded. `ai test` checks actual inference; chat never automatically replays a hardware action after a connection failure. Setup saves the selected endpoint and mode, independently of device configuration.
+
+Both computers must be on your tailnet. On the gaming PC, inspect the listener and local service first:
+
+```powershell
+Get-NetTCPConnection -LocalPort 11434 -State Listen
+Invoke-RestMethod http://localhost:11434/api/version
+```
+
+On the laptop:
+
+```powershell
+tailscale ping 100.111.212.1
+Test-NetConnection 100.111.212.1 -Port 11434
+```
+
+A successful Tailscale ping does not prove port 11434 is accessible. Ollama listening only on loopback cannot accept direct Tailscale connections. After reviewing existing security rules, set the gaming PC's user environment variable `OLLAMA_HOST` to its Tailscale address (`100.111.212.1:11434`) and fully restart Ollama if direct access is desired. Check the listener again. Permit TCP 11434 only from the robot/laptop's Tailscale address in Windows Firewall and restrict access through your tailnet policy; do not disable the firewall or expose this port publicly. HTTP on this connection relies on Tailscale's encrypted transport; RoboClaw itself does not establish or authenticate a tailnet connection. HTTPS endpoints are also supported. See [Ollama networking configuration](https://github.com/ollama/ollama/blob/main/docs/faq.mdx) and [Tailscale access controls](https://tailscale.com/docs/features/access-control).
+
+Hosted API example:
+
+```powershell
+$env:OPENAI_API_KEY = 'YOUR_KEY'
+robot ai setup --mode api --endpoint https://api.openai.com/v1 --model YOUR_TOOL_CAPABLE_MODEL --api-key-env OPENAI_API_KEY
+robot ai test
+```
+
+Keys are read from an environment variable and never written to robot.json, debug output or GitHub. Set the variable in each runtime terminal, or configure it in your service environment. Other providers must implement the OpenAI-compatible `/models` and `/chat/completions` endpoints with function tool calls; provider-specific APIs are not supported by this adapter. HTTPS is required for hosted APIs. Requests do not follow redirects or use system proxies. Conversation text and requested sensor/tool results are sent to the selected backend. Keep hosted API keys out of pasted logs.
+
+The next platform task is capability management: enable or disable individual actions and provide a consistent interface as new devices are added.
