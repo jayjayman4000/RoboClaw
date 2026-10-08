@@ -68,13 +68,16 @@ def main(argv=None):
     sub.add_parser("ports", help="List serial ports without opening them")
     test = sub.add_parser("test", help="Test selected ESP32 telemetry connection")
     test.add_argument("name")
+    test.add_argument("--require-fresh", action="store_true", help="Pass only on usable sensor telemetry")
     test.add_argument("--timeout", type=float, default=5)
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
     sub.add_parser("status")
-    sub.add_parser("inspect", help="Read one state snapshot")
+    inspect = sub.add_parser("inspect", help="Read one state snapshot")
+    inspect.add_argument("--device", action="append", default=[], help="Observe only named devices")
     run = sub.add_parser("run", help="Stream observations; Ctrl+C stops")
+    run.add_argument("--device", action="append", default=[], help="Observe only named devices")
     run.add_argument("--ticks", type=int, default=0)
     run.add_argument("--interval", type=float, default=1.0)
     command = sub.add_parser("command", help="Send one simulated motor command")
@@ -168,11 +171,15 @@ def main(argv=None):
             if not device or device["driver"] != "esp32-json" or not device.get("enabled", True):
                 raise ValueError("test requires an enabled esp32-json device")
             if not 0.1 <= args.timeout <= 60: raise ValueError("timeout must be between 0.1 and 60 seconds")
-            result = connection_test(device, args.timeout)
+            result = connection_test(device, args.timeout, require_fresh=args.require_fresh)
             emit(result)
             return 0 if result["passed"] else 1
         from .setup import settings
+        selected = getattr(args, "device", [])
+        if selected and set(selected) - {d["name"] for d in config["devices"] if d.get("enabled", True)}:
+            raise ValueError("Selected device does not exist or is disabled")
         for device in config["devices"]:
+            if selected and device["name"] not in selected: continue
             if not device.get("enabled", True): continue
             cls = drivers[device["driver"]]
             options = {k: device[k] for k in getattr(cls, "fields", {}) if k in device}

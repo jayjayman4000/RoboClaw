@@ -52,32 +52,54 @@ class SerialTelemetry:
             version = data.get("protocol_version", 0)
             if type(version) is not int or version not in (0, 1):
                 raise ValueError("Unsupported telemetry protocol")
+            bb8_v2 = version == 0 and ("sensor_valid" in data or "head_connected" in data)
+            if bb8_v2:
+                valid, link = data.get("sensor_valid"), data.get("head_connected")
+                age, sequence = data.get("sample_age_ms"), data.get("seq")
+                overwrites = data.get("rx_overwrites")
+                if type(valid) is not bool or type(link) is not bool:
+                    raise ValueError("BB8 v2 requires sensor_valid and head_connected")
+                if type(sequence) is not int or not 0 <= sequence <= 0xffffffff:
+                    raise ValueError("Invalid BB8 radio sequence")
+                if type(overwrites) is not int or not 0 <= overwrites <= 0xffffffff:
+                    raise ValueError("Invalid BB8 overwrite count")
+                if age is not None and (not numeric(age) or age < 0):
+                    raise ValueError("Invalid BB8 sample age")
+                if valid and (age is None or not link):
+                    raise ValueError("Inconsistent BB8 validity")
+            else:
+                valid, age = data.get("valid"), data.get("sample_age_ms")
+                link, sequence = data.get("head_link_valid"), data.get("sample_sequence")
+                overwrites = None
+            verified = version == 1 or bb8_v2
             distance = data.get("distance_cm", data.get("dist"))
-            if not (version == 1 and data.get("valid") is False and distance is None) and (not numeric(distance) or not 0 < distance <= 1200):
+            if not (verified and valid is False and distance is None) and (not numeric(distance) or not 0 < distance <= 1200):
                 raise ValueError("Invalid distance")
             strength = data.get("strength")
             if strength is not None and (type(strength) is not int or not 0 <= strength <= 65535):
                 raise ValueError("Invalid strength")
-            valid, age = data.get("valid"), data.get("sample_age_ms")
             if version == 1:
                 if type(valid) is not bool or not numeric(age) or age < 0:
                     raise ValueError("v1 requires valid and sample_age_ms")
-            link, sequence = data.get("head_link_valid"), data.get("sample_sequence")
             if link is not None and type(link) is not bool:
                 raise ValueError("Invalid head link flag")
             if sequence is not None and (type(sequence) is not int or not 0 <= sequence <= 0xffffffff):
                 raise ValueError("Invalid sample sequence")
-            if version == 1 and link is False:
+            if verified and link is False:
+                valid = False
+            if bb8_v2 and valid and (strength is None or strength < 100 or strength == 65535):
                 valid = False
             self.latest = {"source": "hardware", "protocol_version": version,
+                           "telemetry_schema": "bb8-v2" if bb8_v2 else ("v1" if version == 1 else "legacy"),
+                           "rx_overwrites": overwrites,
                            "distance_m": None if distance is None else distance / 100, "strength": strength,
                            "head_link_valid": link, "sample_sequence": sequence,
-                           "valid": valid if version == 1 else None,
-                           "sample_age_ms": age if version == 1 else None,
+                           "valid": valid if verified else None,
+                           "sample_age_ms": age if verified else None,
                            "obstacle_reported": data.get("brake"), "measurement": "single beam",
                            "head_orientation": None,
-                           "freshness_verified": version == 1,
-                           "warning": None if version == 1 else "Legacy firmware: sensor validity, signal strength and sample age unavailable"}
+                           "freshness_verified": verified,
+                           "warning": None if verified else "Legacy firmware: sensor validity, signal strength and sample age unavailable"}
             self.received = self.clock()
             self.received_at = datetime.now(timezone.utc).isoformat()
         except (ValueError, TypeError, UnicodeDecodeError):
@@ -115,15 +137,22 @@ class SerialTelemetry:
                 self.close()
         age_s = None if self.received is None else max(0, self.clock() - self.received)
         limit = float(self.config.get("stale_after_s", 1))
+        if self.latest and self.latest.get("telemetry_schema") == "bb8-v2":
+            limit = min(limit, .350)
         if self.serial is None:
             health = "disconnected"
         elif self.latest is None:
             health = "waiting"
         elif age_s > limit:
             health = "stale"
-        elif self.latest["protocol_version"] == 1:
-            sensor_age = self.latest["sample_age_ms"] / 1000 + age_s
-            health = "invalid" if not self.latest["valid"] else ("stale" if sensor_age > limit else "ok")
+        elif self.latest["freshness_verified"]:
+            if self.latest.get("telemetry_schema") == "bb8-v2" and self.latest.get("head_link_valid") is False:
+                health = "head_disconnected"
+            elif not self.latest["valid"]:
+                health = "invalid"
+            else:
+                sensor_age = self.latest["sample_age_ms"] / 1000 + age_s
+                health = "stale" if sensor_age > limit else "ok"
         else:
             health = "unverified"
         expected = self.config.get("controller", {}).get("controller_id")
@@ -155,16 +184,18 @@ class SerialTelemetry:
         raise ValueError("Serial telemetry driver is read-only")
 
 
-def connection_test(config, timeout=5):
+def connection_test(config, timeout=5, require_fresh=False):
     driver = SerialTelemetry(config)
     deadline = time.monotonic() + timeout
     reading = None
     try:
         while time.monotonic() < deadline:
             reading = driver.observe()
-            if reading.get("received_at") is not None:
-                return {"passed": True, "test": "recognized telemetry received; not sensor validation", "observation": reading}
+            if reading.get("received_at") is not None and (not require_fresh or reading.get("usable")):
+                return {"passed": True, "fresh_measurement": reading.get("usable", False),
+                        "test": "fresh usable telemetry received" if require_fresh else "recognized telemetry received; not sensor validation",
+                        "observation": reading}
             time.sleep(.05)
-        return {"passed": False, "test": "no recognized telemetry before timeout", "observation": reading}
+        return {"passed": False, "test": "no fresh usable telemetry before timeout" if require_fresh else "no recognized telemetry before timeout", "observation": reading}
     finally:
         driver.close()
