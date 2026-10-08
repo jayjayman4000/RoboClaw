@@ -18,9 +18,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class OllamaBackend:
-    def __init__(self, endpoint='http://localhost:11434', model=None):
+    def __init__(self, endpoint='http://localhost:11434', model=None, timeout_s=180):
         self.endpoint = local_endpoint(endpoint)
         self.model = model
+        if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or not 10 <= timeout_s <= 600:
+            raise ValueError("AI timeout must be between 10 and 600 seconds")
+        self.timeout_s = timeout_s
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
     def request(self, path, payload=None, timeout=60):
@@ -36,8 +39,14 @@ class OllamaBackend:
             return result
         except urllib.error.HTTPError as error:
             raise ValueError(f'Ollama returned HTTP {error.code}; check model installation/tool support') from error
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise ValueError('Cannot reach local Ollama or request timed out. Start Ollama and retry.') from error
+        except TimeoutError as error:
+            raise ValueError(f'Ollama response exceeded {timeout} seconds. The model may be loading or slow; use --timeout 300 or a smaller tool-capable model.') from error
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, TimeoutError):
+                raise ValueError(f'Ollama response exceeded {timeout} seconds. Use --timeout 300 or a smaller tool-capable model.') from error
+            raise ValueError('Cannot connect to local Ollama. Check that Ollama is running and the endpoint is correct.') from error
+        except OSError as error:
+            raise ValueError('Local Ollama connection failed: ' + str(error)) from error
 
     def models(self):
         values=self.request('/api/tags',timeout=5).get('models',[])
@@ -53,23 +62,38 @@ class OllamaBackend:
         capabilities = metadata.get('capabilities', [])
         if not isinstance(capabilities, list) or 'tools' not in capabilities:
             raise ValueError('Selected model does not report tool support; choose a tool-capable model')
-        return {'provider':'ollama','endpoint':self.endpoint,'model':self.model,'status':'configured','tool_support':True}
+        return {'provider':'ollama','endpoint':self.endpoint,'model':self.model,'status':'configured','tool_support':True,'timeout_s':self.timeout_s}
 
     def complete(self,messages,tools):
+        messages = [dict(m) for m in messages]
+        if self.model and self.model.split(':')[0] == 'qwen3':
+            # Soft model hint complements the native API flag; it is not guaranteed.
+            if messages and messages[0].get('role') == 'system':
+                messages[0]['content'] += '\n/no_think'
+            else:
+                messages.insert(0, {'role':'system','content':'Answer directly and use supplied tools when needed. /no_think'})
         response=self.request('/api/chat',{'model':self.model,'messages':messages,'tools':tools,
-                              'stream':False,'think':False,'options':{'temperature':0,'num_predict':1024}})
+                              'stream':False,'think':False,'options':{'temperature':0,'num_predict':512,'num_ctx':4096}}, timeout=self.timeout_s)
         message=response.get('message')
         if not isinstance(message,dict) or message.get('role')!='assistant' or not isinstance(message.get('content',''),str):
             raise ValueError('Invalid assistant response from Ollama')
+        message = dict(message)
+        content = message.get('content', '')
+        # Some model/templates leak a reasoning preamble ending with a lone closing tag.
+        if '</think>' in content:
+            content = content.rsplit('</think>', 1)[1]
+        elif '<think>' in content:
+            content = content.split('<think>', 1)[0]
+        message['content'] = content.strip()
         return message
 
 
-def configure_ai(path,config,save,endpoint=None,model=None):
+def configure_ai(path,config,save,endpoint=None,model=None,timeout_s=None):
     from .setup import choose,yes
     old=config.get('ai_backend',{})
     print('RoboClaw | Local AI setup (Ollama)')
     endpoint=endpoint or (input(f"Ollama endpoint [{old.get('endpoint','http://localhost:11434')}]: ").strip() or old.get('endpoint','http://localhost:11434'))
-    backend=OllamaBackend(endpoint,model)
+    backend=OllamaBackend(endpoint,model,timeout_s if timeout_s is not None else old.get("timeout_s",180))
     if model is None:
         names=backend.models()
         if not names:
