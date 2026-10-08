@@ -115,15 +115,16 @@ class Agent:
                 arguments=fn.get('arguments',{}) if isinstance(fn,dict) else {}
                 result=self.execute(name,arguments,output_used)
                 if debug:self.trace('[tool] '+json.dumps({'name':name,'arguments':arguments,'result':result}))
-                messages.append({'role':'tool','tool_name':str(name),'content':json.dumps(result,allow_nan=False)})
+                tool_result={'role':'tool','tool_name':str(name),'content':json.dumps(result,allow_nan=False)}
+                if isinstance(call,dict) and call.get('id'):tool_result['tool_call_id']=call['id']
+                messages.append(tool_result)
         raise ValueError('No final answer')
 
 
 def chat(config,devices,snapshot,debug=False,timeout_s=None):
-    from .ollama_backend import OllamaBackend
+    from .ai_backend import backend_from_settings
     settings=config.get('ai_backend',{})
-    if settings.get('provider')!='ollama':raise ValueError('Run robot ai setup first')
-    backend=OllamaBackend(settings.get('endpoint','http://localhost:11434'),settings.get('model'), timeout_s if timeout_s is not None else settings.get('timeout_s',180))
+    backend=backend_from_settings(settings,timeout_s)
     backend.check()
     runtime=RobotRuntime(devices,snapshot)
     agent=Agent(backend,runtime)
@@ -141,7 +142,7 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None):
             if text=='/debug':debug=not debug;print('Debug:',debug);continue
             if text=='/reset':agent.history.clear();print('Conversation reset.');continue
             try:
-                print(f'Waiting for local model (up to {backend.timeout_s:g}s per request)...',flush=True)
+                print(f'Waiting for AI model (up to {backend.timeout_s:g}s per request)...',flush=True)
                 print('RoboClaw> '+agent.turn(text,debug))
             except KeyboardInterrupt:break
             except (ValueError,OSError,TypeError) as error:
