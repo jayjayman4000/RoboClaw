@@ -369,3 +369,19 @@ robot ai test
 Keys are read from an environment variable and never written to robot.json, debug output or GitHub. Set the variable in each runtime terminal, or configure it in your service environment. Other providers must implement the OpenAI-compatible `/models` and `/chat/completions` endpoints with function tool calls; provider-specific APIs are not supported by this adapter. HTTPS is required for hosted APIs. Requests do not follow redirects or use system proxies. Conversation text and requested sensor/tool results are sent to the selected backend. Keep hosted API keys out of pasted logs.
 
 The next platform task is capability management: enable or disable individual actions and provide a consistent interface as new devices are added.
+
+### Tailscale onboarding
+
+Remote AI setup now asks whether to use Tailscale or a direct network. Tailscale setup detects an existing CLI (including the standard Windows install folder), skips installation when present, installs when missing, and verifies connection before asking for the remote endpoint. Windows uses WinGet, or the official installer if WinGet is unavailable. Linux including Raspberry Pi OS uses the official Tailscale installation script with sudo when needed. OS administrator prompts and Tailscale sign-in are handled interactively; failures stop setup without saving an AI endpoint. Installed software remains installed if you later cancel AI configuration. Other operating systems receive manual installation instructions. Existing security rules and tailnet preferences are not reset.
+
+```powershell
+robot ai setup --mode remote --network tailscale
+# Already managed network / LAN: bypass Tailscale installation
+robot ai setup --mode remote --network direct --endpoint http://100.111.212.1:11434
+```
+
+Onboarding reminds users to install/connect Tailscale on the remote model computer too. Local and hosted API setup never installs Tailscale. Existing saved remote configurations continue working without rerunning setup.
+
+### Planned robot personality
+
+Future animation setup will offer styles such as catlike curiosity, birdlike curiosity and shy behavior, plus expressiveness and animation frequency controls. This is a planned feature; no autonomous animation or motor behavior is enabled by these changes.
