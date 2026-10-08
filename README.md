@@ -131,3 +131,19 @@ name. Numeric entries such as `5` are normalized to `COM5` on Windows, but do no
 prove that COM5 exists. The adapter reads the body bridge, not the head's startup
 messages. Correct an existing device using `robot remove NAME` then
 `robot add sensor NAME --driver esp32-json --set port=COM5` with the actual port.
+
+## Develop without connected hardware
+
+Run `robot demo` (or `.\.venv\Scripts\robot.exe demo` in PowerShell) to exercise
+the production ESP32 JSON parser using a virtual serial transport. No board,
+serial port, or saved configuration is required. Your robot settings are untouched.
+
+The demo shows partial messages, valid distance and signal strength, malformed
+input, invalid measurements, stale sensor samples while USB remains active,
+telemetry timeout, unplugging, reconnecting, and unverified legacy readings.
+All output is labeled simulation. Scenario time advances deterministically;
+`--interval 0.5` controls only the display pace, not the freshness thresholds.
+
+This tests the host parser and health handling. It does not prove physical USB,
+ESP-NOW, TFmini acquisition, or firmware compatibility. The v1 frames follow
+`docs/telemetry.md`; existing firmware remains supported as unverified legacy.
