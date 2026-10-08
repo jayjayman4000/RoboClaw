@@ -18,7 +18,7 @@ installer. Existing configurations are retained.
 
 Setup lists installed drivers, asks for a device name and driver-specific settings,
 and saves only after review. Repeat to add more devices. Existing devices are kept.
-`robot configure` adds one device. AI is not connected yet.
+`robot configure` adds one device. Configure local AI with `robot ai setup`.
 
 ## Connect your existing ESP32 body firmware
 
@@ -77,8 +77,8 @@ robot command drive stop
 
 Motor commands currently work with the simulated motor only and last for one
 process. The ESP32 driver is read-only. Simulation camera scenes are synthetic,
-not captured images. No motor controller, camera capture, AI or sensor fusion is
-implemented. Run `robot` with no arguments to open setup. Configuration defaults
+not captured images. No motor controller, camera capture or sensor fusion is implemented.
+Optional local AI chat uses Ollama. Run `robot` with no arguments to open setup. Configuration defaults
 to `~/.roboclaw/robot.json`; use `robot --config PATH ...` to select another file.
 Previously configured disabled hardware placeholders remain disabled.
 
@@ -251,6 +251,78 @@ or completion of the sound. This firmware does not authenticate ACK sender MACs;
 acknowledgments are firmware-reported, not cryptographic delivery verification.
 
 Each CLI command exclusively opens its selected bridge and closes it on exit.
-Stop robot run before robot mood; simultaneous CLI access is unsupported. AI is
-not connected yet. Driver capability metadata now exposes the mood action for
+Stop robot run before robot mood; simultaneous CLI access is unsupported. Local AI chat is available with robot ai setup. Driver capability metadata now exposes the mood action for
 future agent integration; this does not authorize or implement other outputs.
+
+## Local AI terminal chat (Ollama)
+
+Install [Ollama for Windows](https://ollama.com/download/windows), keep it running,
+and download a model with tool support. For a first test:
+
+```powershell
+ollama pull qwen3:4b
+git fetch origin
+git switch feature/local-ai-chat
+.\.venv\Scripts\robot.exe ai setup
+.\.venv\Scripts\robot.exe ai test
+.\.venv\Scripts\robot.exe chat --device BodyModule --debug
+```
+
+Setup checks the local server, lists downloaded models, verifies tool support,
+then saves after review. Default endpoint: http://localhost:11434. No API key,
+new Python dependency, automatic download, Ollama installation or cloud backend
+is used. Download/model memory requirements vary; if your computer struggles,
+choose a smaller tool-capable model such as qwen3:1.7b.
+
+Stop robot run and Arduino Serial Monitor before chat. Keep the head powered.
+The existing bb8-v2 BodyModule on COM4 supports read_robot_state and set_buzzer_mood.
+Read-only adapters expose observations only. Chat opens selected devices; with no
+--device arguments it selects enabled hardware drivers and excludes simulated ones.
+Explicitly selected simulations remain labeled simulation. No shell, file, motor,
+LED or camera tools are provided to the model. Installed plugins remain trusted code.
+
+Try: 'What distance is the LiDAR measuring?', 'Make a happy sound', 'Is the head
+connected?' and 'Make a curious sound'. These are real local-model prompts, not
+keyword scripts. Model answers depend on model quality; tool traces show the
+observations and command outcomes used. No genuine model inference was performed
+during development; API and agent tests use scripted server/model responses.
+
+/state shows full live JSON; /tools lists available tools; /debug toggles tool
+traces; /reset clears conversation history; /quit or Ctrl+C closes chat and devices.
+Buzzer outcomes always print even without debug. At most one buzzer request is
+executed per user turn. Unknown tools/invalid arguments are rejected, tool rounds
+are bounded, and only complete recent conversation turns are retained in memory.
+
+A background poller reads telemetry every 50 ms while the model runs. Driver I/O
+is serialized with tool execution. Sensor health is recomputed when requested;
+a previously valid range cannot be reused as usable after timeout/disconnection.
+Responses are not synchronized capture-time perception or a guarantee of physical
+safety. The head ACK reports firmware processing, not independent playback proof.
+
+Inference calls default to a 180-second timeout, configurable with --timeout (10–600 seconds). If local inference exceeds it, chat reports
+an error without automatically retrying an action. First model loading can be slow.
+Chat transcripts are not saved; robot configuration stores only backend settings.
+
+References: [Ollama chat API](https://docs.ollama.com/api/chat),
+[tool calling](https://docs.ollama.com/capabilities/tool-calling).
+
+### Slow local inference
+
+Setup metadata calls succeeding while chat times out means the local server may
+be reachable but generation/loading is too slow for the deadline. Version 0.5.1
+distinguishes connection refusal from timeout, requests shorter replies with a
+4096-token context, and adds Qwen3's /no_think soft hint alongside think:false.
+This hint does not guarantee the model stops reasoning. Leaked think-tag preambles
+are removed from displayed final content.
+
+```powershell
+git pull --ff-only
+.\.venv\Scripts\robot.exe ai test --timeout 300
+.\.venv\Scripts\robot.exe chat --device BodyModule --debug --timeout 300
+```
+
+No setup repeat is needed to use the new default. To persist a different limit:
+`robot ai setup --timeout 300`. If generation is still too slow, inspect Ollama's
+loaded models with `ollama ps` and its version with `ollama --version`; model
+size, CPU/GPU use, available memory and template/version behavior need checking.
+No hardware command runs until an actual valid tool request is received.
