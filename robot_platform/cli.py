@@ -70,6 +70,11 @@ def main(argv=None):
     test.add_argument("name")
     test.add_argument("--require-fresh", action="store_true", help="Pass only on usable sensor telemetry")
     test.add_argument("--timeout", type=float, default=5)
+    mood = sub.add_parser("mood", help="Send one BB8 v2.1 buzzer request and wait for head acknowledgment")
+    mood.add_argument("name")
+    from .bb8_bridge import MOODS
+    mood.add_argument("mood", choices=MOODS)
+    mood.add_argument("--timeout", type=float, default=5)
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -130,7 +135,7 @@ def main(argv=None):
             onboard(args.config, read, save, snapshot, drivers)
             return 0
         if args.verb == "drivers":
-            emit({name: {"kind": cls.kind, "simulation": getattr(cls, "simulation", False), "fields": getattr(cls, "fields", {})}
+            emit({name: {"kind": cls.kind, "simulation": getattr(cls, "simulation", False), "fields": getattr(cls, "fields", {}), "capabilities": getattr(cls, "capabilities", {})}
                   for name, cls in drivers.items()})
             return 0
         if args.verb == "init":
@@ -165,11 +170,23 @@ def main(argv=None):
         if args.verb == "status":
             emit(config)
             return 0
+        if args.verb == "mood":
+            device = next((d for d in config["devices"] if d["name"] == args.name), None)
+            if not device or device["driver"] != "bb8-v2" or not device.get("enabled", True):
+                raise ValueError("mood requires an enabled bb8-v2 device; esp32-json stays read-only")
+            from .setup import settings
+            cls = drivers["bb8-v2"]
+            options = {k: device[k] for k in cls.fields if k in device}
+            driver = cls({**device, **settings(cls, options, interactive=False)})
+            devices[args.name] = driver
+            result = driver.command({"action": "mood", "mood": args.mood, "timeout": args.timeout})
+            emit(result)
+            return 0 if result["acknowledged"] else 1
         if args.verb == "test":
             from .serial_driver import connection_test
             device = next((d for d in config["devices"] if d["name"] == args.name), None)
-            if not device or device["driver"] != "esp32-json" or not device.get("enabled", True):
-                raise ValueError("test requires an enabled esp32-json device")
+            if not device or device["driver"] not in ("esp32-json", "bb8-v2") or not device.get("enabled", True):
+                raise ValueError("test requires an enabled serial bridge device")
             if not 0.1 <= args.timeout <= 60: raise ValueError("timeout must be between 0.1 and 60 seconds")
             result = connection_test(device, args.timeout, require_fresh=args.require_fresh)
             emit(result)
