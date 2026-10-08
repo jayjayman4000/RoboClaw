@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot-platform-starter"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local robot CLI with configurable device plugins and simulated state"
 requires-python = ">=3.10"
 
 [project.scripts]
+roboclaw = "robot_platform.cli:main"
 robot = "robot_platform.cli:main"
 
 [tool.setuptools.packages.find]

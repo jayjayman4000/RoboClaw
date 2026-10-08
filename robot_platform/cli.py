@@ -46,10 +46,11 @@ def snapshot(devices):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Robot platform prototype (simulation only)")
-    parser.add_argument("--config", type=Path, default=Path("robot.json"))
-    sub = parser.add_subparsers(dest="verb", required=True)
+    parser.add_argument("--config", type=Path, default=Path.home() / ".roboclaw" / "robot.json")
+    sub = parser.add_subparsers(dest="verb", required=False)
     init = sub.add_parser("init", help="Create a robot configuration")
     init.add_argument("name")
+    sub.add_parser("setup", help="Guided first-run setup")
     sub.add_parser("drivers", help="List installed driver plugins")
     add = sub.add_parser("add", help="Add a device; omit options for interactive selection")
     add.add_argument("kind", choices=["sensor", "motor"])
@@ -70,6 +71,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         drivers = registry()
+        if args.verb in (None, "setup"):
+            from .setup import onboard
+            onboard(args.config, read, save, snapshot, drivers)
+            return 0
         if args.verb == "drivers":
             emit({name: {"kind": cls.kind, "simulation": name.startswith("sim-")}
                   for name, cls in drivers.items()})
@@ -112,6 +117,8 @@ def main(argv=None):
         # Discovery/configuration work now; hardware execution needs a future contract.
         devices = {}
         for device in config["devices"]:
+            if not device.get("enabled", True):
+                continue
             name = device["driver"]
             if name not in ("sim-camera", "sim-tfmini", "sim-motor"):
                 raise ValueError("This release executes only built-in simulated drivers")

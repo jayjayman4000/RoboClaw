@@ -1,40 +1,50 @@
-# Robot platform starter
+# RoboClaw
 
-Version 0.1.0: a terminal workflow for configuring a robot and collecting shared
-state from simulated devices. No hardware, paid API, ROS installation, or AI model
-is needed. Python 3.10 or newer is required.
+Terminal-first robot platform prototype. Python 3.10+ and Git required.
 
-## Windows quick start
-
-Extract this archive and open PowerShell in the extracted `robot-platform` folder.
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
-.\.venv\Scripts\robot.exe init bb8
-.\.venv\Scripts\robot.exe add sensor camera --driver sim-camera
-.\.venv\Scripts\robot.exe add sensor lidar --driver sim-tfmini
-.\.venv\Scripts\robot.exe add motor drive --driver sim-motor
-.\.venv\Scripts\robot.exe status
-.\.venv\Scripts\robot.exe inspect
-.\.venv\Scripts\robot.exe run --ticks 5
-```
-
-Using the full executable path avoids PowerShell activation-policy changes.
-If `py` is unavailable, install Python from https://www.python.org/downloads/.
-
-## macOS / Linux
+## Install and start guided setup
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-robot init bb8
-robot add sensor camera --driver sim-camera
-robot add sensor lidar --driver sim-tfmini
-robot add motor drive --driver sim-motor
+git clone https://github.com/jayjayman4000/RoboClaw.git
+cd RoboClaw
+python install.py
+```
+
+On Windows, use `py install.py` if `python` is unavailable.
+The installer creates an isolated environment, installs RoboClaw, and starts the
+terminal wizard. Choose a robot profile, simulation or hardware planning, and
+sensors/motors; review and save; then run a simulated check.
+No API key is requested: the AI backend is not implemented yet.
+
+On Windows, accept the user PATH update, then restart your terminal application.
+On Linux/macOS the installer prints a PATH line to add to your shell profile.
+Afterward `robot` and `roboclaw` are available:
+
+```bash
+robot setup
+robot status
+robot inspect
 robot run --ticks 5
 ```
+
+Running `robot` without arguments opens setup. Configuration defaults to
+`~/.roboclaw/robot.json`, independent of your terminal's working directory.
+Use `robot --config PATH setup` for another configuration. Existing devices are
+retained; declining the final save leaves your configuration unchanged.
+
+## Update an existing checkout
+
+```bash
+git pull
+python install.py
+```
+
+Your old `robot.json` is not deleted or automatically imported. To update it
+explicitly, run `robot --config robot.json setup` in its directory.
+Keep the cloned folder in place: installation is linked to its source.
+
+Hardware planning records disabled device placeholders. It does not connect real
+motors/cameras or test them. Simulation checks exercise synthetic observations.
 
 ## Commands
 
