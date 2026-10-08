@@ -175,3 +175,46 @@ read-only. No AI, LED commands or physical motor control is added.
 
 Matching telemetry-only head/body prototypes and limitations are in
 [firmware/README.md](firmware/README.md). They have not been Arduino-compiled or flashed.
+
+## Connect BB8 firmware v2.1 (HeadModule5 / BodyModule5)
+
+Keep your currently flashed v2.1 firmware. The sketches in firmware/ are earlier
+prototypes, not required upgrades. BodyModule5 emits sensor_valid, head_connected,
+sample_age_ms, seq and rx_overwrites alongside dist and brake. This adapter
+recognizes the complete shape as bb8-v2 without inventing a protocol version.
+It accepts invalid null measurements, distinguishes head radio loss from USB loss,
+and retains signal strength and diagnostics. Packet seq is not a sensor sample ID.
+Reported sample age plus host elapsed time must be <=350 ms and within your
+configured stale threshold for a reading to remain usable. Weak/overexposed
+strength cannot be usable. rx_overwrites counts the body's overwritten pending
+packets; it is not an end-to-end packet-loss measurement.
+
+Close Arduino Serial Monitor. Connect only the body to your PC for RoboClaw,
+keeping the head powered for ESP-NOW. List ports and inspect saved configuration:
+
+```powershell
+.\.venv\Scripts\robot.exe ports
+.\.venv\Scripts\robot.exe status
+.\.venv\Scripts\robot.exe test BodyModule --timeout 10 --require-fresh
+.\.venv\Scripts\robot.exe run --device BodyModule --interval 0.1
+```
+
+Replace BodyModule with your configured bridge name. If it is not configured,
+add it using esp32-json and the actual port. If an existing entry owns that port,
+remove that entry before re-adding it with the correct settings. Do not configure
+the head debug port as another telemetry bridge.
+
+```powershell
+.\.venv\Scripts\robot.exe add sensor BodyModule --driver esp32-json --set port=COM5
+```
+
+Replace COM5 with the actual body port. V2.1 does not emit our hello manifest, so
+use manual configuration and skip identity discovery. Do not bind it to a saved
+prototype identity/capability selection. A normal test checks recognized telemetry;
+--require-fresh waits for usable sensor telemetry and fails if only invalid, stale
+or disconnected data arrive. Neither test proves navigation readiness.
+
+Expected: moving an object changes distance_m; disconnecting the LiDAR produces
+invalid/usable:false; powering down the head produces head_disconnected/usable:false;
+unplugging body USB produces disconnected, then automatic recovery on reconnect.
+Ctrl+C ends streaming. No motor or buzzer commands are sent by this adapter.
