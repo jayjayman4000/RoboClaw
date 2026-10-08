@@ -218,3 +218,39 @@ Expected: moving an object changes distance_m; disconnecting the LiDAR produces
 invalid/usable:false; powering down the head produces head_disconnected/usable:false;
 unplugging body USB produces disconnected, then automatic recovery on reconnect.
 Ctrl+C ends streaming. No motor or buzzer commands are sent by this adapter.
+
+## BB8 buzzer output with firmware v2.1
+
+The new bb8-v2 plugin adds only the existing firmware's buzzer mood commands. The
+generic esp32-json plugin stays read-only. Stop streaming with Ctrl+C and close
+Arduino Serial Monitor before using another command on the same serial port.
+
+```powershell
+git fetch origin
+git switch feature/bb8-mood-control
+.\.venv\Scripts\robot.exe remove BodyModule
+.\.venv\Scripts\robot.exe add sensor BodyModule --driver bb8-v2 --set port=COM4
+.\.venv\Scripts\robot.exe mood BodyModule happy --timeout 10
+.\.venv\Scripts\robot.exe mood BodyModule curious
+.\.venv\Scripts\robot.exe mood BodyModule silent
+.\.venv\Scripts\robot.exe run --device BodyModule --interval 0.1
+```
+
+Replace the name/port if needed. This driver uses the same telemetry settings and
+does not require reflashing. Supported moods: silent, happy, curious, talk, alarm,
+boot. Valid LiDAR distance is not required for audio, but recent recognized v2.1
+telemetry must report the head connected. No hardware motor command is supported.
+
+Output distinguishes not_sent, write_failed, radio_rejected, rejected, disconnected,
+ack_timeout, and acknowledged. Only acknowledged returns success (exit code zero).
+Radio acceptance means queued, not confirmed at the head. An acknowledgment must
+match the returned command ID and requested mood. Prior/unrelated acknowledgments
+cannot confirm the request. Timeout means outcome unknown; commands are not retried
+automatically. Head acknowledgment confirms firmware processing, not audible output
+or completion of the sound. This firmware does not authenticate ACK sender MACs;
+acknowledgments are firmware-reported, not cryptographic delivery verification.
+
+Each CLI command exclusively opens its selected bridge and closes it on exit.
+Stop robot run before robot mood; simultaneous CLI access is unsupported. AI is
+not connected yet. Driver capability metadata now exposes the mood action for
+future agent integration; this does not authorize or implement other outputs.
