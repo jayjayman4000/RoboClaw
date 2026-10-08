@@ -111,3 +111,24 @@ class AgentTest(unittest.TestCase):
             self.assertEqual([path for path,payload in requests],['/api/show','/api/chat','/api/chat'])
             self.assertFalse(requests[1][1]['stream'])
         finally:server.shutdown();thread.join();server.server_close()
+    def test_inference_timeout_and_qwen_hint(self):
+        backend=OllamaBackend(model='qwen3:4b',timeout_s=300)
+        original=[{'role':'user','content':'Reply Ready'}]
+        with patch.object(backend,'request',return_value={'message':{'role':'assistant','content':'Reasoning here\n</think>\nReady'}}) as request:
+            self.assertEqual(backend.complete(original,[])['content'],'Ready')
+        self.assertEqual(request.call_args.kwargs['timeout'],300)
+        payload=request.call_args.args[1]
+        self.assertIn('/no_think',payload['messages'][0]['content'])
+        self.assertFalse(payload['think'])
+        self.assertEqual(payload['options']['num_ctx'],4096)
+        self.assertEqual(original,[{'role':'user','content':'Reply Ready'}])
+    def test_timeout_error_distinct_from_unavailable(self):
+        import urllib.error
+        backend=OllamaBackend(model='test')
+        with patch.object(backend.opener,'open',side_effect=TimeoutError()),self.assertRaisesRegex(ValueError,'exceeded 300'):
+            backend.request('/api/chat',{},timeout=300)
+        with patch.object(backend.opener,'open',side_effect=urllib.error.URLError(ConnectionRefusedError())),self.assertRaisesRegex(ValueError,'Cannot connect'):
+            backend.request('/api/chat',{})
+    def test_timeout_limits(self):
+        for value in [True,9,601,float('nan')]:
+            with self.assertRaises(ValueError):OllamaBackend(timeout_s=value)
