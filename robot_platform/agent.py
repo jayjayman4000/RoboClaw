@@ -133,18 +133,21 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None):
     from .ai_backend import backend_from_settings
     settings=config.get('ai_backend',{})
     backend=backend_from_settings(settings,timeout_s)
-    backend.check()
+    from .monitor import AIHealth
+    ai_health=AIHealth(settings)
     runtime=RobotRuntime(devices,snapshot)
     agent=Agent(backend,runtime,permissions=policy(config))
     print(f"RoboClaw | {backend.model} | devices: {', '.join(devices) or 'none'}")
-    print('Commands: /state, /tools, /capabilities, /debug, /reset, /quit. Stop other serial sessions before chat.')
+    print('Commands: /state, /health, /tools, /capabilities, /debug, /reset, /quit. Stop other serial sessions before chat.')
     runtime.start()
+    ai_health.start()
     try:
         while True:
             try: text=input('You> ').strip()
             except (EOFError,KeyboardInterrupt):break
             if text in ('/quit','/exit'):break
             if not text:continue
+            if text=='/health':print(json.dumps({'robot':runtime.state(),'ai':ai_health.state()},indent=2));continue
             if text=='/state':print(json.dumps(runtime.state(),indent=2));continue
             if text=='/capabilities':print(json.dumps({'policy':agent.permissions,'tools':agent.tools},indent=2));continue
             if text=='/tools':print(json.dumps(agent.tools,indent=2));continue
@@ -158,5 +161,6 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None):
                 agent.history.clear()
                 print('Chat error: '+str(error)+'; history cleared. Check any printed buzzer outcome before retrying.')
     finally:
+        ai_health.close()
         runtime.close()
         print('Chat stopped.')
