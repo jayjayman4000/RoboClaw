@@ -89,7 +89,19 @@ class SerialTelemetry:
                 valid = False
             if bb8_v2 and valid and (strength is None or strength < 100 or strength == 65535):
                 valid = False
-            self.latest = {"source": "hardware", "protocol_version": version,
+            extension={}
+            if 'light_supported' in data or 'illumination_supported' in data:
+                ls,led=data.get('light_supported'),data.get('illumination_supported')
+                raw,light_age,on=data.get('light_raw'),data.get('light_age_ms'),data.get('illumination_on')
+                if type(ls) is not bool or type(led) is not bool:raise ValueError('Invalid light capability flags')
+                if ls and (type(raw) is not int or not 0<=raw<=4095 or not numeric(light_age) or light_age<0 or link is not True):raise ValueError('Invalid light reading')
+                if not ls and (raw is not None or light_age is not None):raise ValueError('Unsupported light reading')
+                if led and (type(on) is not bool or link is not True):raise ValueError('Invalid illumination state')
+                if not led and on is not None:raise ValueError('Unsupported illumination state')
+                extension={'light_supported':ls,'illumination_supported':led,'light_raw':raw,'light_age_ms':light_age,
+                           'light_percent':round(raw/4095*100,1) if ls else None,'light_units':'relative ADC percentage, not lux',
+                           'illumination_on':on}
+            self.latest = {**extension,"source": "hardware", "protocol_version": version,
                            "telemetry_schema": "bb8-v2" if bb8_v2 else ("v1" if version == 1 else "legacy"),
                            "rx_overwrites": overwrites,
                            "distance_m": None if distance is None else distance / 100, "strength": strength,
@@ -163,7 +175,11 @@ class SerialTelemetry:
                 c["id"] in selected and c["host_supported"] for c in self.controller["capabilities"])):
             if health not in ("disconnected", "waiting"):
                 health = "disabled"
-        return {**(self.latest or {"source": "hardware", "distance_m": None, "strength": None}),
+        light_usable=bool(self.serial is not None and self.latest and self.latest.get('light_supported') and
+                          self.latest.get('head_link_valid') is True and age_s is not None and
+                          self.latest['light_age_ms']/1000+age_s<=min(limit,.350))
+        illumination_fresh=bool(self.serial is not None and self.latest and self.latest.get('illumination_supported') and self.latest.get('head_link_valid') is True and age_s is not None and age_s<=.350)
+        return {'illumination_state_usable':illumination_fresh,'light_usable':light_usable, **(self.latest or {"source": "hardware", "distance_m": None, "strength": None}),
                 "controller": self.controller,
                 "enabled_capabilities": self.config.get("enabled_capabilities"),
                 "health": health, "connection": "connected" if self.serial else "disconnected",
