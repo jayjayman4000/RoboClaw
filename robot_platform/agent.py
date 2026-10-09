@@ -29,14 +29,14 @@ object. Keep answers concise and explain command failures clearly.'''
 
 
 class RobotRuntime:
-    def __init__(self,devices,snapshot,behavior_settings=None):
+    def __init__(self,devices,snapshot,behavior_settings=None,reaction_settings=None):
         self.devices=devices
         self.snapshot=snapshot
         self.lock=threading.RLock()
         self.stop=threading.Event()
         self.worker=None
         from .behaviors import BehaviorEngine
-        self.behaviors=BehaviorEngine(behavior_settings or {},devices)
+        self.behaviors=BehaviorEngine(behavior_settings or {},devices,reactions=reaction_settings)
 
     def start(self):
         def poll():
@@ -52,7 +52,9 @@ class RobotRuntime:
         with self.lock: return self.snapshot(self.devices)
 
     def mood(self,device,mood):
-        with self.lock: return self.devices[device].command({'action':'mood','mood':mood,'timeout':5})
+        with self.lock:
+            self.behaviors.pause(device)
+            return self.devices[device].command({'action':'mood','mood':mood,'timeout':5})
 
     def illumination(self,device,on):
         with self.lock:
@@ -173,11 +175,12 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False):
     from .monitor import AIHealth
     ai_health=AIHealth(settings)
     from .behaviors import settings as behavior_settings
-    runtime=RobotRuntime(devices,snapshot,behavior_settings(config) if behaviors else None)
+    from .reactions import settings as reaction_settings
+    runtime=RobotRuntime(devices,snapshot,behavior_settings(config) if behaviors else None,reaction_settings(config) if behaviors else None)
     agent=Agent(backend,runtime,permissions=policy(config))
     print(f"RoboClaw | {backend.model} | devices: {', '.join(devices) or 'none'}")
     print('Commands: /state, /health, /tools, /capabilities, /behaviors, /auto pause, /auto resume, /debug, /reset, /quit. Stop other serial sessions before chat.')
-    print('Local behaviors: '+(', '.join(runtime.behaviors.rows) or 'off'))
+    print('Local behaviors: '+(', '.join(sorted(set(runtime.behaviors.rows) | set(runtime.behaviors.reactions))) or 'off'))
     runtime.start()
     ai_health.start()
     try:
