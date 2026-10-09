@@ -15,6 +15,9 @@ object identity. You have no working camera, navigation, motor or pose capabilit
 unless observations explicitly supply them. Distinguish simulation from hardware.
 Invalid, stale, unverified or disconnected readings with usable:false are not
 current distances. Say unavailable rather than inventing measurements.
+For questions about brightness, darkness or light level, call read_robot_state now.
+Report fresh light_percent as relative brightness; lack of lux calibration is NOT a
+reason to refuse a reading or ask permission to read it.
 Ambient light is a relative ADC reading, not calibrated lux. Use light_usable for light
 freshness independently of LiDAR usable. illumination_state_usable indicates whether
 the reported GPIO state is fresh. Illumination acknowledgment does not verify
@@ -58,7 +61,7 @@ class RobotRuntime:
 def tool_definitions(runtime, permissions=None):
     permissions = permissions or {}
     tools=[{'type':'function','function':{'name':'read_robot_state',
-            'description':'Read current selected robot sensor observations and connection health.',
+            'description':'Read current distance, ambient light_raw/light_percent (relative brightness, not lux), illumination state and connection health. Use for light level questions.',
             'parameters':{'type':'object','properties':{},'additionalProperties':False}}}]
     if not permitted_devices(runtime.devices,permissions,'read_robot_state'):tools=[]
     outputs=permitted_devices(runtime.devices,permissions,'set_buzzer_mood')

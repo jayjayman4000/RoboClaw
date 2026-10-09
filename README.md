@@ -458,3 +458,41 @@ robot chat --device BodyModule --debug
 ```
 
 The light percentage is relative ADC scale, not calibrated lux. `light_usable` evaluates its freshness independently of LiDAR. `illumination_state_usable` marks fresh reported GPIO state; acknowledgment confirms head processing, not physical light output. New AI action `set_illumination` honors global/per-device permissions and the same one-output-per-turn bound as buzzer control. No automatic dark-triggered output is enabled. Existing v2.1 installations continue to support LiDAR and buzzer; light/illumination stay unavailable until firmware advertises them and you enable the extensions.
+
+### Local darkness behavior (no firmware update)
+
+RoboClaw can now react to fresh sensor readings without a chat prompt or AI connection.
+This first host-side behavior uses the configured ambient sensor and GPIO5 illumination
+output. It is separate from AI tool permissions and from future IR/eye-ring outputs.
+Stop chat, watch and other serial sessions before running it.
+
+Preview decisions without changing the LED:
+
+```powershell
+.\.venv\Scripts\robot.exe behavior BodyModule
+```
+
+Explicitly allow automatic illumination for this session:
+
+```powershell
+.\.venv\Scripts\robot.exe behavior BodyModule --allow-illumination
+```
+
+Defaults: turn on after relative brightness stays at or below 20% for 2 seconds;
+turn off after it stays at or above 35% for 2 seconds; at least 10 seconds between
+requests. Customize with `--dark`, `--bright`, `--hold`, and `--cooldown`.
+These are relative ADC percentages, not lux; tune them using your own room readings.
+Keep the sensor out of the LED's direct light to avoid feedback cycling.
+
+Both fresh ambient readings and fresh illumination state are required. Missing or
+stale data breaks the settling period and produces no output request. Each sustained
+zone permits one request; failures are reported and not retried, including after a
+reconnect. A sustained opposite zone permits a new transition. Restarting the command
+starts a new session and evaluates current conditions anew. Full observations,
+decisions and acknowledgment outcomes are printed as JSON. Ctrl+C stops the loop;
+it does not change the LED's last commanded state. This behavior requires the host
+process to keep running and is not an ESP32 firmware automatic-light mode.
+
+Hardware roadmap: camera observations, separate IR illumination and RGB eye output,
+body IMU observations, then configurable personality/curiosity. Gas sensor support
+will depend on the specific sensor and what gas it measures.
