@@ -87,6 +87,14 @@ def main(argv=None):
     illumination.add_argument("name")
     illumination.add_argument("state",choices=["on","off"])
     illumination.add_argument("--timeout",type=float,default=5)
+    behavior = sub.add_parser("behavior", help="Run a local darkness behavior; preview by default")
+    behavior.add_argument("name")
+    behavior.add_argument("--allow-illumination", action="store_true", help="Authorize automatic illumination writes for this session")
+    behavior.add_argument("--dark", type=float, default=20)
+    behavior.add_argument("--bright", type=float, default=35)
+    behavior.add_argument("--hold", type=float, default=2)
+    behavior.add_argument("--cooldown", type=float, default=10)
+    behavior.add_argument("--ticks", type=int, default=0)
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -256,6 +264,19 @@ def main(argv=None):
             result=operate(config,args.name,args.verb,getattr(args,"state",None),args.timeout)
             emit(result)
             return 0 if result.get("usable",result.get("acknowledged",False)) else 1
+        if args.verb == "behavior":
+            from .hardware import device_for
+            from .behaviors import Darkness, run as run_behavior
+            from .bb8_bridge import BB8Bridge
+            Darkness(args.dark, args.bright, args.hold, args.cooldown)
+            if args.ticks < 0: raise ValueError("ticks must be >= 0")
+            device = device_for(config, args.name)
+            if not {"ambient_light", "illumination"}.issubset(device.get("extensions", [])):
+                raise ValueError("Enable ambient_light and illumination with robot hardware setup first")
+            devices[args.name] = BB8Bridge(device)
+            run_behavior(devices[args.name], args.name, emit, args.dark, args.bright,
+                         args.hold, args.cooldown, args.allow_illumination, ticks=args.ticks)
+            return 0
         if args.verb == "mood":
             device = next((d for d in config["devices"] if d["name"] == args.name), None)
             if not device or device["driver"] != "bb8-v2" or not device.get("enabled", True):
