@@ -7,12 +7,13 @@ from .behaviors import settings as behavior_settings
 from .reactions import settings as reaction_settings
 
 
-def run_live(config, devices, snapshot, emit, interval=1, ticks=0):
+def run_live(config, devices, snapshot, emit, interval=1, ticks=0, autonomous_ai=False):
     if type(interval) not in (int, float) or not math.isfinite(interval) or not .1 <= interval <= 60:
         raise ValueError('Live interval must be 0.1–60 seconds')
     if type(ticks) is not int or ticks < 0:raise ValueError('ticks must be >= 0')
     if not devices:raise ValueError('Select at least one enabled hardware device')
     runtime = RobotRuntime(devices, snapshot, behavior_settings(config), reaction_settings(config))
+    if autonomous_ai:runtime.enable_autonomy(config)
     stopped = threading.Event()
     previous = None
     if threading.current_thread() is threading.main_thread():
@@ -22,7 +23,7 @@ def run_live(config, devices, snapshot, emit, interval=1, ticks=0):
         count = 0
         while not stopped.is_set() and (ticks == 0 or count < ticks):
             emit({'mode': 'live', 'robot': runtime.state(), 'behaviors': runtime.behavior_state(),
-                  'ai_required': False})
+                  'autonomous_ai': runtime.autonomy_state(), 'ai_required': autonomous_ai})
             count += 1
             if ticks == 0 or count < ticks:stopped.wait(interval)
     except KeyboardInterrupt:
