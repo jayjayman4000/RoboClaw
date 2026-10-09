@@ -547,3 +547,86 @@ commands are never replayed. Quitting waits for an in-flight hardware request to
 finish before the CLI closes its driver, and leaves the last LED state unchanged.
 No firmware changes are required. This is local rule-based autonomy; general AI
 planning and autonomous navigation are future work.
+
+### Personality presets and prompt-free operation
+
+Personality is now a sensor-event policy, separated from hardware execution. Presets
+choose different intentions, rather than simply playing sounds at different rates:
+
+| Preset | Closer settled range cue | Range returns to its previous clearance |
+| --- | --- | --- |
+| Cat | Investigate the change; optional curious sound | Continue exploring |
+| Bird | Give space; stay quiet | Re-engage; optional curious sound |
+| Shy | Give space, with larger changes and longer settling required | Quiet re-engagement |
+
+These are behavioral **intentions**, not executed movement. A single LiDAR beam
+cannot identify people, determine what moved, or prove someone left. Bird remembers
+the pre-change clearance and reports `wait_at_distance` until a later settled range
+returns to that clearance (within 5 cm). Sensor loss or an explicit resume clears
+that memory. Every plan states that autonomous movement has no connected adapter.
+The current expressive adapter only sends supported buzzer moods, with permission;
+future navigation, camera and eye animation adapters can implement the intentions.
+
+```powershell
+robot personality setup BodyModule
+robot personality list
+robot live --device BodyModule
+# Alternatively, keep chat available:
+robot chat --device BodyModule --debug --behaviors
+```
+
+Normal first-run setup offers personality configuration for enabled hardware sensor
+devices. Setup saves a preset, reaction permission, minimum distance change, settling
+time and sound cooldown in `reactions.DEVICE`. All reactions default off when no
+configuration exists. Buzzer permission is separate from both automatic illumination
+and AI tools. Without a supported mood output, the policy still reports intentions.
+
+`live` runs saved enabled behaviors without chat input or an AI connection. It emits
+full sensor state, behavior decisions and recent events. `--ticks N` provides a finite
+run; `--interval` changes status printing, while the shared worker still polls at
+50 ms. Startup establishes a quiet baseline. A changed range must settle and include
+new telemetry before generating an event. Invalid/stale data clears the baseline;
+reconnecting establishes a new quiet baseline rather than replaying a reaction.
+Sound cooldown suppresses outputs while allowing intentions to update; suppressed
+sounds are discarded. Failed hardware requests are reported and never retried from
+that event. Automatic illumination takes priority over expressive outputs.
+
+A manually requested mood or illumination in chat pauses local behaviors on that
+device. `/auto pause`, `/auto resume`, `/behaviors` and `/health` remain available.
+Live stops with Ctrl+C or SIGTERM and leaves outputs in their last commanded state.
+Only one process should own a serial port: stop watch/chat before running live.
+
+#### Adapting another droid
+
+No personality policy depends on BB8 packet formats, pin numbers or a device named
+BodyModule. A driver supplies a normalized observation with `distance_m` (positive
+meters), `usable` (boolean freshness/validity), and `received_at` (a receipt token that
+changes for each new sample). If supplied, `head_link_valid` must also be true. The
+driver must mark stale samples unusable. The policy produces named intentions and
+retains the original range evidence; it does not infer object identities.
+
+Drivers with `capabilities.mood` can implement `command` for a mood request and
+return their actual execution outcome. Drivers without that capability never receive
+expressive commands. Third-party drivers use the existing
+`robot_platform.drivers` entry-point mechanism. Darkness illumination remains the
+existing BB8 extension; the new personality policy itself works with other range
+sources. A new droid still needs a driver for its hardware and configuration for its
+sensors and permissions; copying the program cannot invent those connections.
+
+#### Run saved behaviors at Pi startup
+
+On the configured Linux/Pi host, generate a **live** user service explicitly:
+
+```bash
+.venv/bin/robot service --mode live --device BodyModule --output "$HOME/.config/systemd/user/roboclaw-live.service"
+systemctl --user daemon-reload
+systemctl --user enable --now roboclaw-live.service
+journalctl --user -u roboclaw-live.service -f
+```
+
+Use the earlier user-lingering instructions for startup before login. The generator
+only writes the unit; it never starts/enables a service itself. Default service mode
+remains read-only `watch`. Stop any monitor service before starting the live service
+on the same port. Saved permissions determine actual outputs. On process restart,
+range reactions begin with a new quiet baseline and lighting evaluates current
+conditions anew; no prior event queue is replayed.
