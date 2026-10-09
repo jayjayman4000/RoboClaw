@@ -1,4 +1,5 @@
 """Local observation-driven behaviors; no model calls or firmware changes."""
+import json
 import math
 import time
 
@@ -69,3 +70,115 @@ def run(driver, name, emit, dark=20, bright=35, hold=2, cooldown=10,
                 time.sleep(interval)
     except KeyboardInterrupt:
         pass
+
+
+DEFAULTS = {'enabled': False, 'allow_illumination': False, 'dark': 20,
+            'bright': 35, 'hold': 2, 'cooldown': 10}
+
+
+def settings(config):
+    """Validate saved autonomous permissions without opening hardware."""
+    from copy import deepcopy
+    rows = config.get('behaviors', {})
+    if not isinstance(rows, dict):
+        raise ValueError('behaviors must be an object keyed by device name')
+    devices = {d['name']: d for d in config['devices']}
+    result = {}
+    for name, overrides in rows.items():
+        if name not in devices or not isinstance(overrides, dict) or set(overrides) - set(DEFAULTS):
+            raise ValueError('Unknown behavior device or setting')
+        row = {**DEFAULTS, **overrides}
+        if type(row['enabled']) is not bool or type(row['allow_illumination']) is not bool:
+            raise ValueError('Behavior permissions must be boolean')
+        Darkness(row['dark'], row['bright'], row['hold'], row['cooldown'])
+        if row['enabled']:
+            device = devices[name]
+            if device['driver'] != 'bb8-v2' or not device.get('enabled', True) or not {'ambient_light', 'illumination'}.issubset(device.get('extensions', [])):
+                raise ValueError('Enabled darkness behavior requires an enabled BB8 bridge with light and illumination')
+        result[name] = row
+    return deepcopy(result)
+
+
+def configure(path, config, save, name):
+    from copy import deepcopy
+    from .hardware import device_for
+    from .setup import yes
+    device = device_for(config, name)
+    if not {'ambient_light', 'illumination'}.issubset(device.get('extensions', [])):
+        raise ValueError('Enable ambient light and illumination with hardware setup first')
+    current = settings(config).get(name, DEFAULTS)
+    row = dict(current)
+    print('Local darkness behavior. Permissions are separate from AI actions. Chat requires --behaviors.')
+    row['enabled'] = yes('Enable darkness decisions for this device?')
+    if row['enabled']:
+        row['allow_illumination'] = yes('Allow automatic illumination changes? No means preview only')
+        for key, label in [('dark', 'Turn on at or below relative brightness (%)'),
+                           ('bright', 'Turn off at or above relative brightness (%)'),
+                           ('hold', 'Required sustained reading (seconds)'),
+                           ('cooldown', 'Minimum time between requests (seconds)')]:
+            answer = input(f'{label} [{current[key]}]: ').strip()
+            row[key] = float(answer) if answer else current[key]
+    else:
+        row['allow_illumination'] = False
+    updated = deepcopy(config)
+    updated.setdefault('behaviors', {})[name] = row
+    settings(updated)
+    if not yes('Save behavior settings?'):
+        print('Cancelled. Settings unchanged.')
+        return False
+    save(path, updated)
+    print('Saved. Start chat with --behaviors to use these settings.')
+    return True
+
+
+class BehaviorEngine:
+    """Called under the runtime lock; shares existing drivers with chat."""
+    def __init__(self, rows, devices, trace=print, clock=time.monotonic):
+        from collections import deque
+        self.rows = {n: dict(r) for n, r in rows.items() if r['enabled'] and n in devices}
+        self.devices, self.trace, self.clock = devices, trace, clock
+        self.rules = {n: self.make_rule(r) for n, r in self.rows.items()}
+        self.paused = set()
+        self.latest = {}
+        self.events = deque(maxlen=20)
+
+    @staticmethod
+    def make_rule(row):
+        return Darkness(*(row[k] for k in ('dark', 'bright', 'hold', 'cooldown')))
+
+    def pause(self, name=None):
+        names = [name] if name is not None else list(self.rows)
+        self.paused.update(n for n in names if n in self.rows)
+
+    def resume(self):
+        # Explicit user restart evaluates current evidence; no queued commands.
+        for name in self.paused:
+            self.rules[name] = self.make_rule(self.rows[name])
+        self.paused.clear()
+
+    def state(self):
+        from copy import deepcopy
+        return deepcopy({'settings': self.rows, 'paused_devices': sorted(self.paused),
+                         'latest': self.latest, 'recent_events': list(self.events)})
+
+    def step(self, snapshot):
+        for name, rule in self.rules.items():
+            if name in self.paused:
+                self.latest[name] = {'status': 'paused', 'request': None}
+                continue
+            observation = snapshot.get('devices', {}).get(name, {}).get('observation', {})
+            decision = rule.update(observation, self.clock())
+            self.latest[name] = decision
+            if decision['request'] is None:
+                continue
+            result = None
+            if self.rows[name]['allow_illumination']:
+                try:
+                    result = self.devices[name].command({'action': 'illumination', 'on': decision['request'], 'timeout': 5})
+                except Exception as error:
+                    result = {'acknowledged': False, 'error': str(error)}
+            event = {'device': name, 'behavior': 'darkness',
+                     'mode': 'active' if self.rows[name]['allow_illumination'] else 'preview',
+                     'decision': decision, 'outcome': result}
+            self.events.append(event)
+            self.trace('[behavior] ' + json.dumps(event))

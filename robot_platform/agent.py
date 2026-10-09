@@ -29,17 +29,21 @@ object. Keep answers concise and explain command failures clearly.'''
 
 
 class RobotRuntime:
-    def __init__(self,devices,snapshot):
+    def __init__(self,devices,snapshot,behavior_settings=None):
         self.devices=devices
         self.snapshot=snapshot
         self.lock=threading.RLock()
         self.stop=threading.Event()
         self.worker=None
+        from .behaviors import BehaviorEngine
+        self.behaviors=BehaviorEngine(behavior_settings or {},devices)
 
     def start(self):
         def poll():
             while not self.stop.is_set():
-                with self.lock: self.snapshot(self.devices)
+                with self.lock:
+                    state=self.snapshot(self.devices)
+                    self.behaviors.step(state)
                 self.stop.wait(.05)
         self.worker=threading.Thread(target=poll,name='roboclaw-observations',daemon=True)
         self.worker.start()
@@ -51,11 +55,22 @@ class RobotRuntime:
         with self.lock: return self.devices[device].command({'action':'mood','mood':mood,'timeout':5})
 
     def illumination(self,device,on):
-        with self.lock:return self.devices[device].command({'action':'illumination','on':on,'timeout':5})
+        with self.lock:
+            self.behaviors.pause(device)
+            return self.devices[device].command({'action':'illumination','on':on,'timeout':5})
+
+    def behavior_state(self):
+        with self.lock:return self.behaviors.state()
+
+    def pause_behaviors(self):
+        with self.lock:self.behaviors.pause()
+
+    def resume_behaviors(self):
+        with self.lock:self.behaviors.resume()
 
     def close(self):
         self.stop.set()
-        if self.worker:self.worker.join(timeout=2)
+        if self.worker:self.worker.join()
 
 
 def tool_definitions(runtime, permissions=None):
@@ -151,16 +166,18 @@ class Agent:
         raise ValueError('No final answer')
 
 
-def chat(config,devices,snapshot,debug=False,timeout_s=None):
+def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False):
     from .ai_backend import backend_from_settings
     settings=config.get('ai_backend',{})
     backend=backend_from_settings(settings,timeout_s)
     from .monitor import AIHealth
     ai_health=AIHealth(settings)
-    runtime=RobotRuntime(devices,snapshot)
+    from .behaviors import settings as behavior_settings
+    runtime=RobotRuntime(devices,snapshot,behavior_settings(config) if behaviors else None)
     agent=Agent(backend,runtime,permissions=policy(config))
     print(f"RoboClaw | {backend.model} | devices: {', '.join(devices) or 'none'}")
-    print('Commands: /state, /health, /tools, /capabilities, /debug, /reset, /quit. Stop other serial sessions before chat.')
+    print('Commands: /state, /health, /tools, /capabilities, /behaviors, /auto pause, /auto resume, /debug, /reset, /quit. Stop other serial sessions before chat.')
+    print('Local behaviors: '+(', '.join(runtime.behaviors.rows) or 'off'))
     runtime.start()
     ai_health.start()
     try:
@@ -169,7 +186,10 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None):
             except (EOFError,KeyboardInterrupt):break
             if text in ('/quit','/exit'):break
             if not text:continue
-            if text=='/health':print(json.dumps({'robot':runtime.state(),'ai':ai_health.state()},indent=2));continue
+            if text=='/behaviors':print(json.dumps(runtime.behavior_state(),indent=2));continue
+            if text=='/auto pause':runtime.pause_behaviors();print('Local behaviors paused.');continue
+            if text=='/auto resume':runtime.resume_behaviors();print('Configured local behaviors resumed from current readings.');continue
+            if text=='/health':print(json.dumps({'robot':runtime.state(),'ai':ai_health.state(),'behaviors':runtime.behavior_state()},indent=2));continue
             if text=='/state':print(json.dumps(runtime.state(),indent=2));continue
             if text=='/capabilities':print(json.dumps({'policy':agent.permissions,'tools':agent.tools},indent=2));continue
             if text=='/tools':print(json.dumps(agent.tools,indent=2));continue

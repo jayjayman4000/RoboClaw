@@ -95,6 +95,11 @@ def main(argv=None):
     behavior.add_argument("--hold", type=float, default=2)
     behavior.add_argument("--cooldown", type=float, default=10)
     behavior.add_argument("--ticks", type=int, default=0)
+    behaviors = sub.add_parser("behaviors", help="Saved local behavior settings and permissions")
+    behaviors_sub = behaviors.add_subparsers(dest="behaviors_verb", required=True)
+    behaviors_sub.add_parser("list")
+    behavior_setup = behaviors_sub.add_parser("setup")
+    behavior_setup.add_argument("name")
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -125,6 +130,7 @@ def main(argv=None):
     chat_parser = sub.add_parser("chat", help="Chat with local AI using current sensor state and buzzer tools")
     chat_parser.add_argument("--device", action="append", default=[])
     chat_parser.add_argument("--debug", action="store_true")
+    chat_parser.add_argument("--behaviors", action="store_true", help="Start configured local behaviors alongside chat")
     chat_parser.add_argument("--timeout", type=float, default=None)
     inspect = sub.add_parser("inspect", help="Read one state snapshot")
     inspect.add_argument("--device", action="append", default=[], help="Observe only named devices")
@@ -201,6 +207,12 @@ def main(argv=None):
             print(f"Created {args.config} for {args.name}")
             return 0
         config = read(args.config)
+        if args.verb == "behaviors":
+            from .behaviors import settings as behavior_settings, configure as configure_behaviors
+            if args.behaviors_verb == "setup":
+                return 0 if configure_behaviors(args.config, config, save, args.name) else 1
+            emit({"devices": behavior_settings(config), "scope": "Local behaviors; separate from AI tool permissions"})
+            return 0
         if args.verb == "capabilities":
             from .capabilities import report, configure, set_permission
             if args.cap_verb == "setup":
@@ -251,6 +263,7 @@ def main(argv=None):
             if not any(d["name"] == args.name for d in config["devices"]):
                 raise ValueError("Device not found")
             config["devices"] = [d for d in config["devices"] if d["name"] != args.name]
+            config.get("behaviors", {}).pop(args.name, None)
             save(args.config, config)
             return 0
         if args.verb == "status":
@@ -328,7 +341,7 @@ def main(argv=None):
             watch(config,devices,snapshot,emit,args.interval,args.ai_interval,args.ticks,args.state_file,save)
         elif args.verb == "chat":
             from .agent import chat
-            chat(config, devices, snapshot, args.debug, args.timeout)
+            chat(config, devices, snapshot, args.debug, args.timeout, args.behaviors)
         elif args.verb == "command":
             if args.name not in devices:
                 raise ValueError("Device not found")
