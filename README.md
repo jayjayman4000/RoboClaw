@@ -630,3 +630,87 @@ remains read-only `watch`. Stop any monitor service before starting the live ser
 on the same port. Saved permissions determine actual outputs. On process restart,
 range reactions begin with a new quiet baseline and lighting evaluates current
 conditions anew; no prior event queue is replayed.
+
+### Event-driven autonomous AI decisions
+
+Autonomous AI can evaluate sensor events without a user prompt. It is optional and
+separate from terminal chat: `RobotRuntime` owns hardware; `AutonomousDecisions`
+consumes observations and returns a bounded decision record. A future voice frontend
+can use these same runtime interfaces without requiring terminal input. Microphone,
+speech recognition, voice activity detection and audio response delivery are **not**
+implemented yet.
+
+```powershell
+robot autonomy setup
+robot autonomy status
+robot live --device BodyModule --autonomous-ai
+# Chat remains an optional diagnostic interface:
+robot chat --device BodyModule --debug --behaviors --autonomous-ai
+```
+
+Setup saves `autonomous_ai.enabled`, `allow_buzzer`, `allow_illumination`,
+`decision_budget_s`, `min_interval_s` and `output_cooldown_s`. Defaults are off, no
+output permission, a 3-second event-to-decision budget, 2 seconds between requests,
+and 10 seconds between output attempts per device. Saved enablement and an explicit
+`--autonomous-ai` runtime flag are both required. Only selected devices permitted by
+AI `read_robot_state` are forwarded to the configured local/remote/hosted model.
+Hosted inference may incur provider charges. Sensor values, the event and the preset
+name/policy are sent; no growing chat history or whole-robot snapshot is sent.
+
+Triggers currently include settled single-beam range changes and crossings between
+relative dark (<=20%), middle, and bright (>=35%) zones. Startup and recovery establish
+quiet baselines. They do not identify people or objects. Range changes settle for
+0.5 seconds; event thresholds are currently 0.25m. Event detection remains separate
+from future camera/IMU perception adapters.
+
+#### Responsiveness and stale decisions
+
+- Inference runs in its own worker and never holds the hardware lock while waiting.
+- There is one in-flight request and one replaceable latest pending event, not a FIFO.
+- Each event gets one short inference call, with no model follow-up round.
+- Autonomous Ollama requests disable thinking, limit output to 128 tokens, use a
+  2048-token context and request a 10-minute keep-alive. Normal chat retains its limits.
+- Queuing time counts against the decision budget; the transport receives only the
+  remaining budget. Late results are discarded, rather than executed later.
+- Before dispatch, the runtime reads sensors again under the hardware lock. Newer
+  events, changed range (>0.1m), changed light zone, sensor loss, pauses and shutdown
+  invalidate the decision. Illumination also requires fresh output state.
+- Failed requests back off (up to 60 seconds) and discard pending work. Outputs are
+  never retried from a failed decision. Output cooldown includes failed writes.
+
+The budget is a validity deadline, not a guarantee of model latency. Cold model loads
+or slow hardware can miss it; keep local behaviors enabled for immediate deterministic
+reactions. HTTP timeouts are transport timeouts and do not forcibly cancel inference
+already running on the model server. Latency, discarded decisions and execution
+outcomes are printed and retained in a bounded history. No performance claim for the
+real robot has been established by offline tests.
+
+#### Permissions and competing controllers
+
+The model must return exactly one validated `choose_action`: none, an allowed mood
+(`curious`, `happy`, `silent`), or illumination on/off. Extra/unknown arguments, multiple
+calls, unsupported hardware and denied actions are rejected. Autonomous output
+permissions **and** existing global/per-device AI tool permissions must both allow an
+action. Local configured lighting or spontaneous sound controllers retain ownership
+of their outputs; those actions are excluded from AI choices to prevent competing
+requests. The AI can still decide to do nothing and report why.
+
+In chat, `/autonomy` shows runtime status and `/health` includes it. `/auto pause`
+and `/auto resume` control both local and AI autonomy. A requested mood/illumination
+pauses autonomous controls on that device. An operator turn suspends new autonomous
+inference and invalidates outstanding decisions; completion establishes fresh
+baselines rather than replaying events. Future voice activity detection should call
+`begin_operator_turn()` at speech start and `end_operator_turn()` after handling the
+instruction. An existing server inference cannot be forcibly preempted by this hook,
+but its output cannot execute after invalidation.
+
+For explicitly enabled AI decisions at Pi startup:
+
+```bash
+.venv/bin/robot service --mode live --autonomous-ai --device BodyModule --output "$HOME/.config/systemd/user/roboclaw-live-ai.service"
+```
+
+Enable the generated unit using the earlier systemd instructions. Do not run another
+serial-owning service simultaneously. Hosted keys must be supplied through the
+service environment. Remote AI failure does not stop local sensing/behaviors.
+No motors, navigation, speech synthesis or new firmware outputs are enabled here.
