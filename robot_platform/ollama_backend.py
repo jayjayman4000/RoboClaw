@@ -75,7 +75,8 @@ class OllamaBackend:
             else:
                 messages.insert(0, {'role':'system','content':'Answer directly and use supplied tools when needed. /no_think'})
         response=self.request('/api/chat',{'model':self.model,'messages':messages,'tools':tools,
-                              'stream':False,'think':False,'options':{'temperature':0,'num_predict':512,'num_ctx':4096}}, timeout=self.timeout_s)
+                              'stream':False,'think':False,'keep_alive':getattr(self,'keep_alive','5m'),
+                              'options':{'temperature':0,'num_predict':getattr(self,'num_predict',512),'num_ctx':getattr(self,'num_ctx',4096)}}, timeout=self.timeout_s)
         message=response.get('message')
         if not isinstance(message,dict) or message.get('role')!='assistant' or not isinstance(message.get('content',''),str):
             raise ValueError('Invalid assistant response from Ollama')
