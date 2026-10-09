@@ -133,11 +133,16 @@ def configure(path, config, save, name):
 
 class BehaviorEngine:
     """Called under the runtime lock; shares existing drivers with chat."""
-    def __init__(self, rows, devices, trace=print, clock=time.monotonic):
+    def __init__(self, rows, devices, trace=print, clock=time.monotonic, reactions=None):
         from collections import deque
         self.rows = {n: dict(r) for n, r in rows.items() if r['enabled'] and n in devices}
         self.devices, self.trace, self.clock = devices, trace, clock
         self.rules = {n: self.make_rule(r) for n, r in self.rows.items()}
+        from .reactions import RangeChanges, Temperament
+        self.reactions = {n: dict(r) for n, r in (reactions or {}).items() if r['enabled'] and n in devices}
+        self.range_rules = {n: RangeChanges(*(r[k] for k in ('change_m', 'settle_s', 'cooldown_s'))) for n, r in self.reactions.items()}
+        self.temperaments = {n: Temperament(r["profile"]) for n, r in self.reactions.items()}
+        self.reaction_latest = {}
         self.paused = set()
         self.latest = {}
         self.events = deque(maxlen=20)
@@ -147,21 +152,27 @@ class BehaviorEngine:
         return Darkness(*(row[k] for k in ('dark', 'bright', 'hold', 'cooldown')))
 
     def pause(self, name=None):
-        names = [name] if name is not None else list(self.rows)
-        self.paused.update(n for n in names if n in self.rows)
+        names = [name] if name is not None else set(self.rows) | set(self.reactions)
+        self.paused.update(n for n in names if n in self.rows or n in self.reactions)
 
     def resume(self):
         # Explicit user restart evaluates current evidence; no queued commands.
         for name in self.paused:
-            self.rules[name] = self.make_rule(self.rows[name])
+            if name in self.rows:self.rules[name] = self.make_rule(self.rows[name])
+            if name in self.reactions:
+                from .reactions import RangeChanges
+                row = self.reactions[name]
+                self.range_rules[name] = RangeChanges(*(row[k] for k in ('change_m', 'settle_s', 'cooldown_s')))
+                self.temperaments[name].reset()
         self.paused.clear()
 
     def state(self):
         from copy import deepcopy
         return deepcopy({'settings': self.rows, 'paused_devices': sorted(self.paused),
-                         'latest': self.latest, 'recent_events': list(self.events)})
+                         'latest': self.latest, 'reactions': self.reactions, 'reaction_latest': self.reaction_latest, 'recent_events': list(self.events)})
 
     def step(self, snapshot):
+        output_dispatched = False
         for name, rule in self.rules.items():
             if name in self.paused:
                 self.latest[name] = {'status': 'paused', 'request': None}
@@ -173,6 +184,7 @@ class BehaviorEngine:
                 continue
             result = None
             if self.rows[name]['allow_illumination']:
+                output_dispatched = True
                 try:
                     result = self.devices[name].command({'action': 'illumination', 'on': decision['request'], 'timeout': 5})
                 except Exception as error:
@@ -182,3 +194,33 @@ class BehaviorEngine:
                      'decision': decision, 'outcome': result}
             self.events.append(event)
             self.trace('[behavior] ' + json.dumps(event))
+
+        if output_dispatched:
+            for name in self.range_rules:
+                self.reaction_latest[name] = {'status': 'deferred_for_illumination', 'event': None}
+            return
+        for name, rule in self.range_rules.items():
+            if name in self.paused:
+                self.reaction_latest[name] = {'status': 'paused', 'event': None}
+                continue
+            observation = snapshot.get('devices', {}).get(name, {}).get('observation', {})
+            decision = rule.update(observation, self.clock())
+            self.reaction_latest[name] = decision
+            if decision['status'] == 'unavailable':self.temperaments[name].reset()
+            if decision['event'] is None:continue
+            plan = self.temperaments[name].decide(decision['event'])
+            self.reaction_latest[name]['plan'] = plan
+            result = None
+            supported = bool(getattr(self.devices[name], 'capabilities', {}).get('mood'))
+            permitted = (self.reactions[name]['allow_buzzer'] and supported
+                         and decision['event']['reaction_allowed'] and plan['sound'] is not None)
+            if permitted:
+                try:
+                    result = self.devices[name].command({'action': 'mood', 'mood': plan['sound'], 'timeout': 5})
+                except Exception as error:
+                    result = {'acknowledged': False, 'error': str(error)}
+            event = {'device': name, 'behavior': 'curiosity', 'profile': self.reactions[name]['profile'],
+                     'mode': 'active' if permitted else 'intent_only', 'decision': decision, 'plan': plan, 'outcome': result}
+            self.events.append(event)
+            self.trace('[behavior] ' + json.dumps(event))
+            if permitted:return  # Read a new snapshot before any other expressive output.

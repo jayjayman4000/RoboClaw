@@ -100,6 +100,15 @@ def main(argv=None):
     behaviors_sub.add_parser("list")
     behavior_setup = behaviors_sub.add_parser("setup")
     behavior_setup.add_argument("name")
+    personality = sub.add_parser("personality", help="Configure sensor-triggered expressive reactions")
+    personality_sub = personality.add_subparsers(dest="personality_verb", required=True)
+    personality_sub.add_parser("list")
+    personality_setup = personality_sub.add_parser("setup")
+    personality_setup.add_argument("name")
+    live = sub.add_parser("live", help="Run configured local behaviors without a chat prompt")
+    live.add_argument("--device", action="append", default=[])
+    live.add_argument("--ticks", type=int, default=0)
+    live.add_argument("--interval", type=float, default=1)
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -146,6 +155,7 @@ def main(argv=None):
     watch_parser.add_argument("--state-file", type=Path)
     service_parser = sub.add_parser("service", help="Generate a Linux user systemd monitor service")
     service_parser.add_argument("--device", action="append", default=[])
+    service_parser.add_argument("--mode", choices=["watch", "live"], default="watch")
     service_parser.add_argument("--output", type=Path)
     command = sub.add_parser("command", help="Send one simulated motor command")
     command.add_argument("name")
@@ -207,6 +217,12 @@ def main(argv=None):
             print(f"Created {args.config} for {args.name}")
             return 0
         config = read(args.config)
+        if args.verb == "personality":
+            from .reactions import settings as reaction_settings, configure as configure_reactions, PROFILES
+            if args.personality_verb == "setup":
+                return 0 if configure_reactions(args.config, config, save, args.name) else 1
+            emit({"devices": reaction_settings(config), "profiles": PROFILES})
+            return 0
         if args.verb == "behaviors":
             from .behaviors import settings as behavior_settings, configure as configure_behaviors
             if args.behaviors_verb == "setup":
@@ -264,6 +280,7 @@ def main(argv=None):
                 raise ValueError("Device not found")
             config["devices"] = [d for d in config["devices"] if d["name"] != args.name]
             config.get("behaviors", {}).pop(args.name, None)
+            config.get("reactions", {}).pop(args.name, None)
             save(args.config, config)
             return 0
         if args.verb == "status":
@@ -315,7 +332,11 @@ def main(argv=None):
             from .service import unit
             enabled = {d['name'] for d in config['devices'] if d.get('enabled',True)}
             if set(args.device)-enabled:raise ValueError('Selected device does not exist or is disabled')
-            content = unit(args.config,args.device)
+            if args.mode == "live":
+                from .behaviors import settings as behavior_settings
+                from .reactions import settings as reaction_settings
+                behavior_settings(config);reaction_settings(config)
+            content = unit(args.config,args.device,mode=args.mode)
             if args.output:
                 if args.output.resolve() == args.config.resolve():raise ValueError('Service output cannot overwrite robot configuration')
                 args.output.parent.mkdir(parents=True,exist_ok=True)
@@ -334,9 +355,12 @@ def main(argv=None):
             if not device.get("enabled", True): continue
             cls = drivers[device["driver"]]
             options = {k: device[k] for k in getattr(cls, "fields", {}) if k in device}
-            if args.verb in ("chat", "watch") and not selected and getattr(cls, "simulation", False): continue
+            if args.verb in ("chat", "watch", "live") and not selected and getattr(cls, "simulation", False): continue
             devices[device["name"]] = cls({**device, **settings(cls, options, interactive=False)})
-        if args.verb == "watch":
+        if args.verb == "live":
+            from .live import run_live
+            run_live(config, devices, snapshot, emit, args.interval, args.ticks)
+        elif args.verb == "watch":
             from .monitor import watch
             watch(config,devices,snapshot,emit,args.interval,args.ai_interval,args.ticks,args.state_file,save)
         elif args.verb == "chat":

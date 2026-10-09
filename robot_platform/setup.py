@@ -116,6 +116,12 @@ def onboard(path, read, save, snapshot, drivers):
     if yes("Configure AI action permissions now?"):
         from .capabilities import configure
         configure(path, read(path), save, drivers)
+    for device in read(path)['devices']:
+        cls = drivers.get(device['driver'])
+        if device.get('enabled', True) and cls and cls.kind == 'sensor' and not getattr(cls, 'simulation', False):
+            if yes(f"Configure personality reactions for {device['name']}?"):
+                from .reactions import configure as configure_reactions
+                configure_reactions(path, read(path), save, device['name'])
 
 
 def apply_discovery(device, controller):
