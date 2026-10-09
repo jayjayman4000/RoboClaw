@@ -496,3 +496,54 @@ process to keep running and is not an ESP32 firmware automatic-light mode.
 Hardware roadmap: camera observations, separate IR illumination and RGB eye output,
 body IMU observations, then configurable personality/curiosity. Gas sensor support
 will depend on the specific sensor and what gas it measures.
+
+### Share chat and local behaviors
+
+Save darkness thresholds and independent autonomous permissions once:
+
+```powershell
+robot behaviors setup BodyModule
+robot behaviors list
+```
+
+Setup offers enabled/disabled and active/preview choices, then validates the on/off
+thresholds, settling time and cooldown. It preserves your hardware settings, AI
+endpoint and AI action permissions. It does not open a serial port. Settings are
+stored under `behaviors.DEVICE` in robot.json. Missing settings mean off.
+
+Start a single serial-owning process for chat plus configured behavior decisions:
+
+```powershell
+robot chat --device BodyModule --debug --behaviors
+```
+
+Normal chat without `--behaviors` continues to perform requested actions only.
+Only enabled behavior devices selected for this chat are evaluated. A preview
+configuration cannot send illumination requests, even with `--behaviors`. Saved
+`allow_illumination` is a local autonomous permission, independent of AI permission
+`set_illumination`: disabling either one does not change the other. The model cannot
+change these settings or start/resume behaviors. The older `robot behavior` command
+remains a separate standalone bench session with its own explicit command-line
+permission; do not run it alongside chat.
+
+The existing observation worker evaluates local rules while the remote model is
+thinking or unavailable. Automatic and requested commands share one runtime lock,
+so they cannot interleave serial writes or acknowledgments. Local behavior request
+outcomes are printed immediately and retained in a bounded history of 20 events.
+They are not automatically forwarded to the AI provider.
+
+In chat:
+
+- `/behaviors` shows configuration, current decisions, pauses and recent outcomes.
+- `/health` also includes behavior status.
+- `/auto pause` pauses local behavior decisions without changing output state.
+- `/auto resume` explicitly restarts paused rules from current sensor evidence.
+
+An AI illumination request made on your behalf pauses automatic lighting on that
+device for the rest of the session, even if the hardware request fails. This prevents
+automation from immediately undoing your requested on/off state. Use `/auto resume`
+when you want automatic control again. Resume resets the settling period; queued
+commands are never replayed. Quitting waits for an in-flight hardware request to
+finish before the CLI closes its driver, and leaves the last LED state unchanged.
+No firmware changes are required. This is local rule-based autonomy; general AI
+planning and autonomous navigation are future work.
