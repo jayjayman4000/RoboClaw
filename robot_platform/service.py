@@ -10,10 +10,12 @@ def quote(value):
     return '"'+value.replace('\\','\\\\').replace('"','\\"').replace('%','%%').replace('$','$$')+'"'
 
 
-def unit(config_path,devices,python=None,mode="watch"):
+def unit(config_path,devices,python=None,mode="watch",autonomous_ai=False):
     if platform.system()!='Linux':raise ValueError('Generate the systemd service on the Raspberry Pi/Linux host after installing RoboClaw there')
     if mode not in ('watch','live'):raise ValueError('Choose watch or live service mode')
     args=[python or sys.executable,'-m','robot_platform.cli','--config',str(Path(config_path).resolve()),mode]
+    if autonomous_ai and mode != 'live':raise ValueError('Autonomous AI requires live service mode')
+    if autonomous_ai:args+=['--autonomous-ai']
     for name in devices:args+=['--device',name]
     description = 'RoboClaw read-only hardware and AI health monitor' if mode == 'watch' else 'RoboClaw configured local autonomous behaviors'
     return '''[Unit]

@@ -35,14 +35,30 @@ class RobotRuntime:
         self.lock=threading.RLock()
         self.stop=threading.Event()
         self.worker=None
+        self.autonomy=None
         from .behaviors import BehaviorEngine
         self.behaviors=BehaviorEngine(behavior_settings or {},devices,reactions=reaction_settings)
 
+    def enable_autonomy(self, config, backend=None):
+        from .autonomy import AutonomousDecisions, settings
+        from .ai_backend import backend_from_settings
+        row=settings(config)
+        if not row['enabled']:raise ValueError('Enable autonomous AI with robot autonomy setup first')
+        if backend is None:
+            backend=backend_from_settings(config.get('ai_backend',{}),10)
+            backend.timeout_s=row['decision_budget_s']
+            backend.num_predict=128
+            backend.num_ctx=2048
+            backend.keep_alive='10m'
+        self.autonomy=AutonomousDecisions(config,self,backend)
+
     def start(self):
+        if self.autonomy:self.autonomy.start()
         def poll():
             while not self.stop.is_set():
                 with self.lock:
                     state=self.snapshot(self.devices)
+                    if self.autonomy:self.autonomy.feed(state)
                     self.behaviors.step(state)
                 self.stop.wait(.05)
         self.worker=threading.Thread(target=poll,name='roboclaw-observations',daemon=True)
@@ -54,24 +70,34 @@ class RobotRuntime:
     def mood(self,device,mood):
         with self.lock:
             self.behaviors.pause(device)
+            if self.autonomy:self.autonomy.pause([device])
             return self.devices[device].command({'action':'mood','mood':mood,'timeout':5})
 
     def illumination(self,device,on):
         with self.lock:
             self.behaviors.pause(device)
+            if self.autonomy:self.autonomy.pause([device])
             return self.devices[device].command({'action':'illumination','on':on,'timeout':5})
 
     def behavior_state(self):
         with self.lock:return self.behaviors.state()
 
     def pause_behaviors(self):
-        with self.lock:self.behaviors.pause()
+        with self.lock:
+            self.behaviors.pause()
+            if self.autonomy:self.autonomy.pause(self.devices)
 
     def resume_behaviors(self):
-        with self.lock:self.behaviors.resume()
+        with self.lock:
+            self.behaviors.resume()
+            if self.autonomy:self.autonomy.resume()
+
+    def autonomy_state(self):
+        return self.autonomy.state() if self.autonomy else {"enabled":False}
 
     def close(self):
         self.stop.set()
+        if self.autonomy:self.autonomy.close()
         if self.worker:self.worker.join()
 
 
@@ -168,7 +194,7 @@ class Agent:
         raise ValueError('No final answer')
 
 
-def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False):
+def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False,autonomous_ai=False):
     from .ai_backend import backend_from_settings
     settings=config.get('ai_backend',{})
     backend=backend_from_settings(settings,timeout_s)
@@ -177,9 +203,10 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False):
     from .behaviors import settings as behavior_settings
     from .reactions import settings as reaction_settings
     runtime=RobotRuntime(devices,snapshot,behavior_settings(config) if behaviors else None,reaction_settings(config) if behaviors else None)
+    if autonomous_ai:runtime.enable_autonomy(config)
     agent=Agent(backend,runtime,permissions=policy(config))
     print(f"RoboClaw | {backend.model} | devices: {', '.join(devices) or 'none'}")
-    print('Commands: /state, /health, /tools, /capabilities, /behaviors, /auto pause, /auto resume, /debug, /reset, /quit. Stop other serial sessions before chat.')
+    print('Commands: /state, /health, /tools, /capabilities, /behaviors, /autonomy, /auto pause, /auto resume, /debug, /reset, /quit. Stop other serial sessions before chat.')
     print('Local behaviors: '+(', '.join(sorted(set(runtime.behaviors.rows) | set(runtime.behaviors.reactions))) or 'off'))
     runtime.start()
     ai_health.start()
@@ -189,10 +216,11 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False):
             except (EOFError,KeyboardInterrupt):break
             if text in ('/quit','/exit'):break
             if not text:continue
+            if text=='/autonomy':print(json.dumps(runtime.autonomy_state(),indent=2));continue
             if text=='/behaviors':print(json.dumps(runtime.behavior_state(),indent=2));continue
-            if text=='/auto pause':runtime.pause_behaviors();print('Local behaviors paused.');continue
-            if text=='/auto resume':runtime.resume_behaviors();print('Configured local behaviors resumed from current readings.');continue
-            if text=='/health':print(json.dumps({'robot':runtime.state(),'ai':ai_health.state(),'behaviors':runtime.behavior_state()},indent=2));continue
+            if text=='/auto pause':runtime.pause_behaviors();print('Local and AI autonomous controls paused.');continue
+            if text=='/auto resume':runtime.resume_behaviors();print('Configured autonomous controls resumed from current readings.');continue
+            if text=='/health':print(json.dumps({'robot':runtime.state(),'ai':ai_health.state(),'behaviors':runtime.behavior_state(),'autonomy':runtime.autonomy_state()},indent=2));continue
             if text=='/state':print(json.dumps(runtime.state(),indent=2));continue
             if text=='/capabilities':print(json.dumps({'policy':agent.permissions,'tools':agent.tools},indent=2));continue
             if text=='/tools':print(json.dumps(agent.tools,indent=2));continue
@@ -200,7 +228,10 @@ def chat(config,devices,snapshot,debug=False,timeout_s=None,behaviors=False):
             if text=='/reset':agent.history.clear();print('Conversation reset.');continue
             try:
                 print(f'Waiting for AI model (up to {backend.timeout_s:g}s per request)...',flush=True)
-                print('RoboClaw> '+agent.turn(text,debug))
+                if runtime.autonomy:runtime.autonomy.begin_operator_turn()
+                try:print('RoboClaw> '+agent.turn(text,debug))
+                finally:
+                    if runtime.autonomy:runtime.autonomy.end_operator_turn()
             except KeyboardInterrupt:break
             except (ValueError,OSError,TypeError) as error:
                 agent.history.clear()

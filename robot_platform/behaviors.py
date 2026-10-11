@@ -59,7 +59,7 @@ def run(driver, name, emit, dark=20, bright=35, hold=2, cooldown=10,
             result = None
             if decision['request'] is not None and execute:
                 try:
-                    result = driver.command({'action': 'illumination', 'on': decision['request'], 'timeout': 5})
+                    result = driver.command({'action': 'illumination', 'on': decision['request'], 'timeout': 1})
                 except (OSError, ValueError) as error:
                     result = {'acknowledged': False, 'error': str(error)}
             emit({'behavior': 'darkness', 'device': name, 'mode': 'active' if execute else 'preview',
@@ -186,7 +186,7 @@ class BehaviorEngine:
             if self.rows[name]['allow_illumination']:
                 output_dispatched = True
                 try:
-                    result = self.devices[name].command({'action': 'illumination', 'on': decision['request'], 'timeout': 5})
+                    result = self.devices[name].command({'action': 'illumination', 'on': decision['request'], 'timeout': 1})
                 except Exception as error:
                     result = {'acknowledged': False, 'error': str(error)}
             event = {'device': name, 'behavior': 'darkness',
@@ -216,7 +216,7 @@ class BehaviorEngine:
                          and decision['event']['reaction_allowed'] and plan['sound'] is not None)
             if permitted:
                 try:
-                    result = self.devices[name].command({'action': 'mood', 'mood': plan['sound'], 'timeout': 5})
+                    result = self.devices[name].command({'action': 'mood', 'mood': plan['sound'], 'timeout': 1})
                 except Exception as error:
                     result = {'acknowledged': False, 'error': str(error)}
             event = {'device': name, 'behavior': 'curiosity', 'profile': self.reactions[name]['profile'],

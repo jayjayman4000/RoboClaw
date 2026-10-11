@@ -109,6 +109,11 @@ def main(argv=None):
     live.add_argument("--device", action="append", default=[])
     live.add_argument("--ticks", type=int, default=0)
     live.add_argument("--interval", type=float, default=1)
+    live.add_argument("--autonomous-ai", action="store_true")
+    autonomy = sub.add_parser("autonomy", help="Configure bounded autonomous AI decisions")
+    autonomy_sub = autonomy.add_subparsers(dest="autonomy_verb", required=True)
+    autonomy_sub.add_parser("setup")
+    autonomy_sub.add_parser("status")
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -139,6 +144,7 @@ def main(argv=None):
     chat_parser = sub.add_parser("chat", help="Chat with local AI using current sensor state and buzzer tools")
     chat_parser.add_argument("--device", action="append", default=[])
     chat_parser.add_argument("--debug", action="store_true")
+    chat_parser.add_argument("--autonomous-ai", action="store_true")
     chat_parser.add_argument("--behaviors", action="store_true", help="Start configured local behaviors alongside chat")
     chat_parser.add_argument("--timeout", type=float, default=None)
     inspect = sub.add_parser("inspect", help="Read one state snapshot")
@@ -156,6 +162,7 @@ def main(argv=None):
     service_parser = sub.add_parser("service", help="Generate a Linux user systemd monitor service")
     service_parser.add_argument("--device", action="append", default=[])
     service_parser.add_argument("--mode", choices=["watch", "live"], default="watch")
+    service_parser.add_argument("--autonomous-ai", action="store_true")
     service_parser.add_argument("--output", type=Path)
     command = sub.add_parser("command", help="Send one simulated motor command")
     command.add_argument("name")
@@ -217,6 +224,12 @@ def main(argv=None):
             print(f"Created {args.config} for {args.name}")
             return 0
         config = read(args.config)
+        if args.verb == "autonomy":
+            from .autonomy import configure as configure_autonomy, settings as autonomy_settings
+            if args.autonomy_verb == "setup":
+                return 0 if configure_autonomy(args.config, config, save) else 1
+            emit(autonomy_settings(config))
+            return 0
         if args.verb == "personality":
             from .reactions import settings as reaction_settings, configure as configure_reactions, PROFILES
             if args.personality_verb == "setup":
@@ -336,7 +349,10 @@ def main(argv=None):
                 from .behaviors import settings as behavior_settings
                 from .reactions import settings as reaction_settings
                 behavior_settings(config);reaction_settings(config)
-            content = unit(args.config,args.device,mode=args.mode)
+            if args.autonomous_ai:
+                from .autonomy import settings as autonomy_settings
+                if not autonomy_settings(config)['enabled']:raise ValueError('Enable autonomous AI with autonomy setup first')
+            content = unit(args.config,args.device,mode=args.mode,autonomous_ai=args.autonomous_ai)
             if args.output:
                 if args.output.resolve() == args.config.resolve():raise ValueError('Service output cannot overwrite robot configuration')
                 args.output.parent.mkdir(parents=True,exist_ok=True)
@@ -359,13 +375,13 @@ def main(argv=None):
             devices[device["name"]] = cls({**device, **settings(cls, options, interactive=False)})
         if args.verb == "live":
             from .live import run_live
-            run_live(config, devices, snapshot, emit, args.interval, args.ticks)
+            run_live(config, devices, snapshot, emit, args.interval, args.ticks, args.autonomous_ai)
         elif args.verb == "watch":
             from .monitor import watch
             watch(config,devices,snapshot,emit,args.interval,args.ai_interval,args.ticks,args.state_file,save)
         elif args.verb == "chat":
             from .agent import chat
-            chat(config, devices, snapshot, args.debug, args.timeout, args.behaviors)
+            chat(config, devices, snapshot, args.debug, args.timeout, args.behaviors, args.autonomous_ai)
         elif args.verb == "command":
             if args.name not in devices:
                 raise ValueError("Device not found")

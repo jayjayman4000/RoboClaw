@@ -29,7 +29,7 @@ class TailscaleTest(unittest.TestCase):
         self.assertIn('Tailscale.Tailscale',run.call_args.args[0]);self.assertIn('--exact',run.call_args.args[0])
     def test_linux_script_runs_without_shell_interpolation(self):
         response=Mock();response.read.return_value=b'# test';response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
-        with patch('robot_platform.tailscale_setup.platform.system',return_value='Linux'),patch('robot_platform.tailscale_setup.os.geteuid',return_value=1000),patch('robot_platform.tailscale_setup.shutil.which',return_value='sudo'),patch('robot_platform.tailscale_setup.urllib.request.urlopen',return_value=response),patch('robot_platform.tailscale_setup.run') as run,redirect_stdout(StringIO()):install_tailscale()
+        with patch('robot_platform.tailscale_setup.platform.system',return_value='Linux'),patch('robot_platform.tailscale_setup.os.geteuid',return_value=1000,create=True),patch('robot_platform.tailscale_setup.shutil.which',return_value='sudo'),patch('robot_platform.tailscale_setup.urllib.request.urlopen',return_value=response),patch('robot_platform.tailscale_setup.run') as run,redirect_stdout(StringIO()):install_tailscale()
         self.assertEqual(run.call_args.args[0][:2],['sudo','sh'])
     def test_windows_cli_not_in_path(self):
         with patch('robot_platform.tailscale_setup.shutil.which',return_value=None),patch('robot_platform.tailscale_setup.platform.system',return_value='Windows'),patch('robot_platform.tailscale_setup.Path.is_file',return_value=True):
