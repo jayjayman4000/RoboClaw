@@ -132,3 +132,46 @@ class AgentTest(unittest.TestCase):
     def test_timeout_limits(self):
         for value in [True,9,601,float('nan')]:
             with self.assertRaises(ValueError):OllamaBackend(timeout_s=value)
+
+    def test_target_selection_uses_fresh_anonymous_candidate_and_output_guard(self):
+        class Vision:
+            kind='sensor';capabilities={'target_selection':True}
+        class VisionRuntime:
+            devices={'Vision':Vision()}
+            def __init__(self):self.selections=[];self.reads=0
+            def state(self):
+                self.reads+=1
+                return {'simulation':False,'devices':{'Vision':{'health':'ok','observation':{
+                    'observation_type':'visual_attention','usable':True,'session_id':'s1',
+                    'candidates':[{'candidate_id':7,'x':.2,'y':.4}]}}}}
+            def select_target(self,device,session_id,candidate_id):
+                self.selections.append((device,session_id,candidate_id))
+                return {'acknowledged':True,'selected_candidate_id':candidate_id}
+        runtime=VisionRuntime()
+        permissions={'actions':{'select_target':True}}
+        agent=Agent(None,runtime,trace=lambda x:None,permissions=permissions)
+        self.assertIn('select_target',[tool['function']['name'] for tool in agent.tools])
+        used=[False]
+        result=agent.execute('select_target',{'device':'Vision','session_id':'s1','candidate_id':7},used)
+        self.assertTrue(result['acknowledged'])
+        self.assertEqual(runtime.selections,[('Vision','s1',7)])
+        self.assertIn('error',agent.execute('select_target',{'device':'Vision','session_id':'s1','candidate_id':7},used))
+        self.assertEqual(len(runtime.selections),1)
+
+    def test_target_selection_rejects_stale_or_forged_candidate(self):
+        class Vision:
+            kind='sensor';capabilities={'target_selection':True}
+        class VisionRuntime:
+            devices={'Vision':Vision()}
+            def state(self):
+                return {'devices':{'Vision':{'observation':{'observation_type':'visual_attention',
+                    'usable':True,'session_id':'new','candidates':[{'candidate_id':9}]}}}}
+            def select_target(self,*args):raise AssertionError('must not execute')
+        agent=Agent(None,VisionRuntime(),permissions={'actions':{'select_target':True}})
+        for arguments in [
+            {'device':'Vision','session_id':'old','candidate_id':9},
+            {'device':'Vision','session_id':'new','candidate_id':7},
+            {'device':'Vision','session_id':'new','candidate_id':True},
+            {'device':'Vision','session_id':'new','candidate_id':9,'extra':1},
+        ]:
+            self.assertIn('error',agent.execute('select_target',arguments,[False]))

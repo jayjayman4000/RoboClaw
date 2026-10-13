@@ -19,7 +19,8 @@ def response(action='mood', **args):
 
 
 class Driver:
-    capabilities = {'mood': True, 'illumination': True}
+    kind = 'sensor'
+    capabilities = {'mood': True, 'illumination': True, 'target_selection': True}
     def __init__(self):self.calls = []
     def command(self, action):
         self.calls.append(action);return {'acknowledged': True}
@@ -196,3 +197,44 @@ class AutonomyTests(unittest.TestCase):
             self.assertEqual(payload['options']['num_predict'], tokens)
             self.assertEqual(payload['options']['num_ctx'], context)
             self.assertEqual(payload['keep_alive'], keep);self.assertFalse(payload['think'])
+
+    def test_visual_attention_event_selects_one_fresh_candidate(self):
+        self.now=0;driver=Driver()
+        visual={'observation_type':'visual_attention','usable':True,'session_id':'s1',
+                'attention_sequence':3,'candidates':[{'candidate_id':7,'x':.2,'y':.4}]}
+        runtime=RobotRuntime({'vision':driver},lambda ds:{'devices':{'vision':{'observation':dict(visual)}}})
+        config={'devices':[{'name':'vision','driver':'test'}],
+                'ai_capabilities':{'actions':{'select_target':True}},
+                'autonomous_ai':{'enabled':True,'allow_buzzer':False,'allow_illumination':False,
+                                 'allow_target_selection':True}}
+        backend=Backend(response('select_target',session_id='s1',candidate_id=7))
+        auto=AutonomousDecisions(config,runtime,backend,trace=lambda s:None,clock=lambda:self.now)
+        auto.feed({'devices':{'vision':{'observation':dict(visual)}}})
+        event=auto.pending
+        self.assertEqual(event['event']['type'],'visual_candidates_changed')
+        generation=event['generation']
+        auto.feed({'devices':{'vision':{'observation':dict(visual)}}})
+        self.assertEqual(auto.pending['generation'],generation)
+        report=auto.decide(event)
+        self.assertEqual(report['status'],'executed')
+        self.assertEqual(driver.calls,[{'action':'select_target','session_id':'s1','candidate_id':7}])
+        self.assertEqual(backend.calls,1)
+
+    def test_visual_selection_is_explicit_and_stale_results_do_not_execute(self):
+        self.now=0;driver=Driver()
+        visual={'observation_type':'visual_attention','usable':True,'session_id':'s1',
+                'attention_sequence':1,'candidates':[{'candidate_id':7}]}
+        runtime=RobotRuntime({'vision':driver},lambda ds:{'devices':{'vision':{'observation':dict(visual)}}})
+        base={'devices':[{'name':'vision','driver':'test'}],
+              'ai_capabilities':{'actions':{'select_target':True}},
+              'autonomous_ai':{'enabled':True,'allow_buzzer':False,'allow_illumination':False}}
+        disabled=AutonomousDecisions(base,runtime,Backend(),trace=lambda s:None,clock=lambda:self.now)
+        self.assertNotIn('select_target',disabled.actions('vision'))
+        config={**base,'autonomous_ai':{**base['autonomous_ai'],'allow_target_selection':True}}
+        def change():visual['attention_sequence']=2;visual['candidates']=[]
+        auto=AutonomousDecisions(config,runtime,Backend(response('select_target',session_id='s1',candidate_id=7),change),trace=lambda s:None,clock=lambda:self.now)
+        auto.generation['vision']=1
+        event={'device':'vision','event':{'type':'visual_candidates_changed','session_id':'s1','attention_sequence':1,
+               'candidate_ids':[7]},'observation':dict(visual),'created':0,'generation':1}
+        self.assertEqual(auto.decide(event)['status'],'discarded_stale')
+        self.assertEqual(driver.calls,[])

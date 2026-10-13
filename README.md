@@ -648,7 +648,7 @@ robot live --device BodyModule --autonomous-ai
 robot chat --device BodyModule --debug --behaviors --autonomous-ai
 ```
 
-Setup saves `autonomous_ai.enabled`, `allow_buzzer`, `allow_illumination`,
+Setup saves `autonomous_ai.enabled`, `allow_buzzer`, `allow_illumination`, `allow_target_selection`,
 `decision_budget_s`, `min_interval_s` and `output_cooldown_s`. Defaults are off, no
 output permission, a 3-second event-to-decision budget, 2 seconds between requests,
 and 10 seconds between output attempts per device. Saved enablement and an explicit
@@ -657,7 +657,7 @@ AI `read_robot_state` are forwarded to the configured local/remote/hosted model.
 Hosted inference may incur provider charges. Sensor values, the event and the preset
 name/policy are sent; no growing chat history or whole-robot snapshot is sent.
 
-Triggers currently include settled single-beam range changes and crossings between
+Triggers currently include settled single-beam range changes, visual-candidate membership changes, and crossings between
 relative dark (<=20%), middle, and bright (>=35%) zones. Startup and recovery establish
 quiet baselines. They do not identify people or objects. Range changes settle for
 0.5 seconds; event thresholds are currently 0.25m. Event detection remains separate
@@ -688,7 +688,8 @@ real robot has been established by offline tests.
 #### Permissions and competing controllers
 
 The model must return exactly one validated `choose_action`: none, an allowed mood
-(`curious`, `happy`, `silent`), or illumination on/off. Extra/unknown arguments, multiple
+(`curious`, `happy`, `silent`), illumination on/off, or a current session-bound anonymous
+visual candidate. Extra/unknown arguments, multiple
 calls, unsupported hardware and denied actions are rejected. Autonomous output
 permissions **and** existing global/per-device AI tool permissions must both allow an
 action. Local configured lighting or spontaneous sound controllers retain ownership
@@ -714,3 +715,26 @@ Enable the generated unit using the earlier systemd instructions. Do not run ano
 serial-owning service simultaneously. Hosted keys must be supplied through the
 service environment. Remote AI failure does not stop local sensing/behaviors.
 No motors, navigation, speech synthesis or new firmware outputs are enabled here.
+
+### BB8 V6 visual-attention bridge
+
+`extras/visual_tracker_v6.py` keeps camera processing local to the Raspberry Pi. It
+publishes bounded anonymous motion candidates on loopback port 8084. RoboClaw selects
+which candidate the tracker follows; selection does **not** turn the head, body or any
+motor. The API and dashboard bind to `127.0.0.1`, so camera imagery is not exposed to
+the LAN or tailnet.
+
+```bash
+robot add sensor Vision --driver bb8-vision \
+  --set endpoint=http://127.0.0.1:8084 \
+  --set timeout_s=0.5 --set stale_after_s=1.0
+robot capabilities enable select_target
+robot capabilities enable select_target --device Vision
+robot inspect --device Vision
+```
+
+The driver rejects redirects, proxies, non-loopback endpoints, oversized responses,
+invalid schemas, frozen frame sequences, stale sessions and candidates. Candidate IDs
+are process-session scoped and describe only position, size, persistence and motion.
+They are not object, face or person recognition. Autonomous selection additionally
+requires `allow_target_selection: true` and the explicit `--autonomous-ai` runtime flag.
