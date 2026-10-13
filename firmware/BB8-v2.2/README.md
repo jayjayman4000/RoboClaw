@@ -4,7 +4,7 @@ These sketches extend the user's working HeadModule5/BodyModule5 firmware suppli
 
 - Head: `HeadModule6/HeadModule6.ino`
 - Body: `BodyModule6/BodyModule6.ino`
-- Target: ESP32-S3, Arduino ESP32 core 3.x, with the same board/USB settings used to flash v2.1.
+- Target: ESP32-S3 N16R8, Arduino ESP32 core 3.3.7. Each sketch directory has a checked-in PlatformIO environment using `esp32-s3-devkitc1-n16r8`, hardware USB CDC/JTAG mode, and USB CDC at boot so the Raspberry Pi can exchange newline-delimited commands and telemetry over the board's native USB port.
 - Existing pins: buzzer GPIO4, TFmini RX GPIO17/TX GPIO18, ESP-NOW channel 1.
 - Added pins: photoresistor divider GPIO1 (ADC1), illumination GPIO5 (digital output).
 
@@ -17,8 +17,8 @@ Light sampling averages eight 12-bit ADC reads per 50 ms telemetry cycle with `A
 ## Flash and test
 
 1. Close chat, watch, Arduino Serial Monitor and other serial programs.
-2. Flash HeadModule6 to the **head** board. Flash BodyModule6 to the **body** board. Both files are needed to expose the extensions over USB.
-3. Power the head, reconnect the body to the laptop and keep COM4 if Windows still assigns that port.
+2. Build with `pio run -d BodyModule6` and `pio run -d HeadModule6`. Flash BodyModule6 to the **body** board and HeadModule6 to the **head** board; do not substitute the generic N8 target or omit the USB build flags in each sketch's `platformio.ini`.
+3. Power the head, reconnect the body to the Raspberry Pi or laptop, and use the serial port actually assigned by the host.
 4. In the RoboClaw project:
 
 ```powershell
