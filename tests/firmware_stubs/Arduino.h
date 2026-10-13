@@ -11,8 +11,8 @@ using esp_err_t=int;using portMUX_TYPE=int;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
-inline uint32_t fakeNow=0;inline int gpioValue[50]{};inline int adcValue=2048;
-inline std::vector<uint8_t> sentPacket;
+inline uint32_t fakeNow=0;inline int gpioValue[50]{};inline int adcValue=2048;inline uint32_t lastToneHz=0;
+inline std::vector<uint8_t> sentPacket;inline uint32_t sentPacketCount=0;
 inline uint32_t millis(){return fakeNow;}
 inline uint32_t esp_random(){return 1;}
 inline void randomSeed(uint32_t){}
@@ -22,7 +22,7 @@ inline void digitalWrite(int pin,int v){gpioValue[pin]=v;}
 inline void analogReadResolution(int){}
 inline void analogSetPinAttenuation(int,int){}
 inline int analogRead(int){return adcValue;}
-inline void ledcWriteTone(int,uint32_t){}
+inline void ledcWriteTone(int,uint32_t hz){lastToneHz=hz;}
 inline void ledcAttach(int,int,int){}
 struct FakeSerial {
  std::string output;
@@ -43,4 +43,4 @@ inline int esp_now_init(){return ESP_OK;}
 inline int esp_now_add_peer(const esp_now_peer_info_t*){return ESP_OK;}
 inline bool esp_now_is_peer_exist(const uint8_t*){return true;}
 inline void esp_now_register_recv_cb(void(*)(const esp_now_recv_info_t*,const uint8_t*,int)){}
-inline int esp_now_send(const uint8_t*,const uint8_t*p,size_t n){sentPacket.assign(p,p+n);return ESP_OK;}
+inline int esp_now_send(const uint8_t*,const uint8_t*p,size_t n){sentPacket.assign(p,p+n);sentPacketCount++;return ESP_OK;}

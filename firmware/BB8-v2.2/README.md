@@ -38,4 +38,22 @@ The original 24-byte packed packet, magic and version 2 are retained. Telemetry 
 
 Packet type 4 requests illumination; reserved[0] is exactly 0 or 1. Type 5 acknowledges that GPIO command with the same sequence and value. Existing mood commands/type 2 and acknowledgments/type 3 are retained. Body accepts acknowledgments only from its paired head. Serial commands are exact lines `illumination on` / `illumination off`. Old heads have no feature flags and cannot authorize illumination; old bodies ignore the extra telemetry fields. The host writes once, matches command ID plus boolean state, and never retries an ambiguous output.
 
-Validation in development uses Python tests plus native C++ builds with mocked Arduino/ESP-NOW APIs to exercise both sketches. This is **not** a complete ESP32 toolchain build or physical hardware validation. Compile and upload both sketches with your Arduino installation, then perform the wiring tests above.
+## Droid-language buzzer extension
+
+The passive piezo on head GPIO4 now has nine fixed, repeatable phrases made only from tones and silent gaps: `hello`, `yes`, `no`, `question`, `acknowledge`, `excited`, `confused`, `warning`, and `goodbye`. The patterns run from the normal `loop()` as a `millis()` state machine; there are no blocking delays. A safety-triggered alarm mood preempts a phrase. While the obstacle flag remains active, the body refuses new phrases and the head independently refuses both phrase and ordinary mood commands, so they cannot silence the alarm.
+
+The Raspberry Pi sends one exact USB serial line to the body, for example `sound hello`. The body validates the name, requires fresh head telemetry advertising `FLAG_SOUND`, sends ESP-NOW packet type 6, and reports `command_sent`. The head validates the phrase ID, starts the local tone sequence, and returns type 7. The body emits `sound_ack` with the original command ID and phrase ID. The Pi matches both fields and never retries an ambiguous command automatically. The body adds a random boot-session value and monotonic command sequence; the head rejects duplicate, out-of-order, and recently retired-session phrase packets, and the body rejects phrase acknowledgments from another session. The original packed packet remains 24 bytes and protocol version 2; telemetry flag bit 5 advertises language support.
+
+After flashing both boards, enable and test from the Pi:
+
+```bash
+robot hardware setup BodyModule
+robot sound BodyModule hello
+robot sound BodyModule question
+```
+
+An acknowledgment proves that the head firmware accepted the phrase, not that the buzzer was physically audible. Bench-check all nine phrases with the motors disconnected. This feature assumes the confirmed passive piezo on GPIO4; an active buzzer cannot reproduce the variable pitches.
+
+ESP-NOW remains unencrypted and is not cryptographically authenticated. First-sender MAC locking plus session/sequence checks reduce accidental cross-talk and recorded-packet replay, but they do not stop a nearby active attacker from spoofing a new session. Use only for bench/prototype sound output until fixed MAC allowlists and provisioned ESP-NOW keys are added.
+
+Validation uses the Python suite, native C++ logic builds with mocked Arduino/ESP-NOW APIs, and complete PlatformIO ESP32-S3 builds against Arduino-ESP32 3.3.7. Physical buzzer and radio validation still requires flashing both boards and running the bench checks above.

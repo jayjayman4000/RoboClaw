@@ -4,6 +4,7 @@ import time
 from .serial_driver import SerialTelemetry
 
 MOODS = ('silent', 'happy', 'curious', 'talk', 'alarm', 'boot')
+SOUNDS = ('hello', 'yes', 'no', 'question', 'acknowledge', 'excited', 'confused', 'warning', 'goodbye')
 
 class BB8Bridge(SerialTelemetry):
     label = 'BB8 v2.1 bridge (range telemetry and acknowledged buzzer moods)'
@@ -13,15 +14,16 @@ class BB8Bridge(SerialTelemetry):
         super().__init__(*args, **kwargs)
         self.capabilities = dict(type(self).capabilities)
         extensions=self.config.get('extensions',[])
-        if not isinstance(extensions,list) or set(extensions)-{'ambient_light','illumination'}:raise ValueError('Unknown BB8 extensions')
+        if not isinstance(extensions,list) or set(extensions)-{'ambient_light','illumination','droid_language'}:raise ValueError('Unknown BB8 extensions')
         if 'illumination' in extensions:self.capabilities['illumination']={'values':[False,True],'acknowledged':True}
+        if 'droid_language' in extensions:self.capabilities['sound']={'values':list(SOUNDS),'acknowledged':True}
         self.events = []
         self.sleep = time.sleep
 
     def _accept(self, line):
         try:
             event = json.loads(line)
-            if isinstance(event, dict) and event.get('type') in ('command_sent', 'command_ack', 'illumination_ack', 'error'):
+            if isinstance(event, dict) and event.get('type') in ('command_sent', 'command_ack', 'illumination_ack', 'sound_ack', 'error'):
                 kind = event['type']
                 if kind != 'error' and (type(event.get('id')) is not int or not 0 <= event['id'] <= 0xffffffff):
                     raise ValueError('Invalid command ID')
@@ -30,6 +32,8 @@ class BB8Bridge(SerialTelemetry):
                 if kind == 'command_ack' and (type(event.get('mood')) is not int or not 0 <= event['mood'] < len(MOODS)):
                     raise ValueError('Invalid acknowledged mood')
                 if kind == 'illumination_ack' and type(event.get('on')) is not bool:raise ValueError('Invalid illumination acknowledgment')
+                if kind == 'sound_ack' and (type(event.get('sound')) is not int or not 0 <= event['sound'] < len(SOUNDS)):
+                    raise ValueError('Invalid acknowledged sound')
                 self.events.append(event)
                 self.events = self.events[-32:]
                 return
@@ -49,9 +53,15 @@ class BB8Bridge(SerialTelemetry):
 
     def command(self, action):
         mood = action.get('mood')
-        is_light=action.get('action')=='illumination'
+        sound = action.get('sound')
+        is_light = action.get('action') == 'illumination'
+        is_sound = action.get('action') == 'sound'
         if is_light:
-            if 'illumination' not in self.capabilities or type(action.get('on')) is not bool:raise ValueError('Enable illumination hardware and supply on as a boolean')
+            if 'illumination' not in self.capabilities or type(action.get('on')) is not bool:
+                raise ValueError('Enable illumination hardware and supply on as a boolean')
+        elif is_sound:
+            if 'sound' not in self.capabilities or sound not in SOUNDS:
+                raise ValueError('Enable droid_language and choose: ' + ', '.join(SOUNDS))
         elif action.get('action') != 'mood' or mood not in MOODS:
             raise ValueError('Supported action: mood with ' + ', '.join(MOODS))
         timeout = action.get('timeout', 5)
@@ -62,19 +72,29 @@ class BB8Bridge(SerialTelemetry):
                   'accepted_by_radio': False, 'acknowledged': False, 'command_id': None,
                   'note': 'Acknowledgment reports head processing; it does not verify audible playback'}
         if is_light:
-            result.update(action='illumination',on=action['on'],note='Acknowledgment confirms head GPIO processing; it does not verify emitted light')
+            result.update(action='illumination', on=action['on'], note='Acknowledgment confirms head GPIO processing; it does not verify emitted light')
+            result.pop('mood')
+        elif is_sound:
+            result.update(action='sound', sound=sound)
             result.pop('mood')
         state = None
         while self.clock() < deadline:
             state = self.observe()
-            if state.get('telemetry_schema') == 'bb8-v2' and state.get('head_link_valid') is True and state.get('received_age_s', 10) <= .35 and (not is_light or state.get('illumination_supported') is True):
+            compatible = (not is_light or state.get('illumination_supported') is True) and (not is_sound or state.get('sound_supported') is True)
+            if state.get('telemetry_schema') == 'bb8-v2' and state.get('head_link_valid') is True and state.get('received_age_s', 10) <= .35 and compatible:
                 break
             self.sleep(.05)
         else:
-            return {**result, 'status': 'not_sent', 'error': 'No recent connected BB8 v2.1 head telemetry', 'observation': state}
+            return {**result, 'status': 'not_sent', 'error': 'No recent compatible BB8 head telemetry', 'observation': state}
         # Drop pre-command acknowledgments. Only one request is written, never auto-retried.
         self.events.clear()
-        payload = (('illumination '+('on' if action['on'] else 'off') if is_light else mood) + '\n').encode('ascii')
+        if is_light:
+            line = 'illumination ' + ('on' if action['on'] else 'off')
+        elif is_sound:
+            line = 'sound ' + sound
+        else:
+            line = mood
+        payload = (line + '\n').encode('ascii')
         try:
             self.serial.write_timeout = .5
             if self.serial.write(payload) != len(payload):
@@ -94,8 +114,12 @@ class BB8Bridge(SerialTelemetry):
                         return {**result, 'status': 'radio_rejected'}
             if result['command_id'] is not None:
                 for event in self.events:
-                    if event['type'] not in ('command_ack','illumination_ack'):continue
-                    if event['id'] == result['command_id'] and ((is_light and event['type']=='illumination_ack' and event['on']==action['on']) or (not is_light and event['type']=='command_ack' and event['mood']==MOODS.index(mood))):
+                    matches = (
+                        is_light and event['type'] == 'illumination_ack' and event['on'] == action['on']
+                        or is_sound and event['type'] == 'sound_ack' and event['sound'] == SOUNDS.index(sound)
+                        or not is_light and not is_sound and event['type'] == 'command_ack' and event['mood'] == MOODS.index(mood)
+                    )
+                    if event['id'] == result['command_id'] and matches:
                         return {**result, 'acknowledged': True, 'status': 'acknowledged'}
             if state.get('connection') == 'disconnected':
                 return {**result, 'status': 'disconnected', 'error': state.get('error')}

@@ -13,8 +13,8 @@ static_assert(ILLUMINATION_PIN!=BUZZER_PIN && ILLUMINATION_PIN!=TF_RX && ILLUMIN
 bool illuminationOn=false;
 constexpr uint8_t CHANNEL=1;
 constexpr uint32_t MAGIC=0x42384238; // B8B8
-constexpr uint8_t VERSION=2, TELEMETRY=1, COMMAND=2, ACK=3, LIGHT_COMMAND=4, LIGHT_ACK=5;
-constexpr uint16_t FLAG_LIGHT=4, FLAG_ILLUMINATION=8, FLAG_LED_ON=16;
+constexpr uint8_t VERSION=2, TELEMETRY=1, COMMAND=2, ACK=3, LIGHT_COMMAND=4, LIGHT_ACK=5, SOUND_COMMAND=6, SOUND_ACK=7;
+constexpr uint16_t FLAG_LIGHT=4, FLAG_ILLUMINATION=8, FLAG_LED_ON=16, FLAG_SOUND=32;
 constexpr uint32_t SAMPLE_TIMEOUT_MS=350, SEND_PERIOD_MS=50;
 constexpr uint16_t BRAKE_ON_CM=30, BRAKE_OFF_CM=36, MIN_STRENGTH=100;
 const uint8_t BROADCAST[6]={255,255,255,255,255,255};
@@ -31,6 +31,17 @@ struct __attribute__((packed)) Packet {
 static_assert(sizeof(Packet)==24,"Unexpected packet size");
 constexpr uint16_t FLAG_VALID=1, FLAG_OBSTACLE=2;
 enum Mood : uint8_t { SILENT, HAPPY, CURIOUS, TALK, ALARM, BOOT };
+enum Sound : uint8_t { HELLO, YES, NO, QUESTION, ACKNOWLEDGE, EXCITED, CONFUSED, WARNING, GOODBYE, SOUND_COUNT };
+struct ToneStep { uint16_t hz, durationMs; };
+constexpr ToneStep SOUND_HELLO[]={{1200,80},{0,35},{1700,90},{0,35},{2200,130}};
+constexpr ToneStep SOUND_YES[]={{1500,80},{0,35},{2200,170}};
+constexpr ToneStep SOUND_NO[]={{2200,90},{0,40},{1200,190}};
+constexpr ToneStep SOUND_QUESTION[]={{1200,70},{0,30},{1600,70},{0,30},{2400,200}};
+constexpr ToneStep SOUND_ACKNOWLEDGE[]={{1800,60},{0,25},{1800,60}};
+constexpr ToneStep SOUND_EXCITED[]={{1500,55},{0,20},{1900,55},{0,20},{2400,70},{0,25},{2800,120}};
+constexpr ToneStep SOUND_CONFUSED[]={{2100,90},{0,35},{1500,100},{0,70},{1850,160}};
+constexpr ToneStep SOUND_WARNING[]={{2800,120},{0,60},{1700,120},{0,60},{2800,120},{0,60},{1700,160}};
+constexpr ToneStep SOUND_GOODBYE[]={{2200,90},{0,40},{1700,100},{0,40},{1100,180}};
 HardwareSerial lidar(1);
 uint8_t frame[9]; uint8_t framePos=0;
 uint16_t distanceCm=0, strength=0;
@@ -38,17 +49,53 @@ uint32_t lastGood=0, lastSend=0, sequence=0;
 bool hasSample=false, obstacle=false, radioReady=false;
 Mood mood=SILENT;
 uint32_t toneAt=0; uint8_t step=0, talkSteps=0;
+bool soundActive=false,soundStepRunning=false;Sound sound=HELLO;uint8_t soundStep=0;uint32_t soundToneAt=0;
 portMUX_TYPE commandMux=portMUX_INITIALIZER_UNLOCKED;
 volatile bool commandPending=false;
 Packet pendingCommand{};
 uint8_t commandMac[6]{};
 uint8_t lastController[6]{};
 bool controllerKnown=false;
+uint32_t soundSession=0,lastSoundSequence=0,retiredSoundSessions[4]{};uint8_t retiredSoundSessionAt=0;bool haveSoundSession=false,haveSoundSequence=false;
 
 bool validPacket(const Packet &p){return p.magic==MAGIC && p.version==VERSION;}
+bool acceptSoundSequence(uint32_t session,uint32_t sequence){
+  if(session==0)return false;
+  if(!haveSoundSession || session!=soundSession){
+    for(uint8_t i=0;i<4;i++)if(retiredSoundSessions[i]==session)return false;
+    if(haveSoundSession){retiredSoundSessions[retiredSoundSessionAt]=soundSession;retiredSoundSessionAt=(retiredSoundSessionAt+1)%4;}
+    soundSession=session;haveSoundSession=true;haveSoundSequence=false;
+  }
+  if(haveSoundSequence && (int32_t)(sequence-lastSoundSequence)<=0)return false;
+  lastSoundSequence=sequence;haveSoundSequence=true;return true;
+}
 void setTone(uint32_t hz){ledcWriteTone(BUZZER_PIN,hz);}
-void startMood(Mood m){mood=m;step=0;toneAt=0;talkSteps=(uint8_t)random(10,18);setTone(0);}
+void startMood(Mood m){soundActive=false;soundStepRunning=false;mood=m;step=0;toneAt=0;talkSteps=(uint8_t)random(10,18);setTone(0);}
+void soundPattern(Sound id,const ToneStep *&pattern,uint8_t &count){
+  switch(id){
+    case HELLO:pattern=SOUND_HELLO;count=sizeof(SOUND_HELLO)/sizeof(*SOUND_HELLO);break;
+    case YES:pattern=SOUND_YES;count=sizeof(SOUND_YES)/sizeof(*SOUND_YES);break;
+    case NO:pattern=SOUND_NO;count=sizeof(SOUND_NO)/sizeof(*SOUND_NO);break;
+    case QUESTION:pattern=SOUND_QUESTION;count=sizeof(SOUND_QUESTION)/sizeof(*SOUND_QUESTION);break;
+    case ACKNOWLEDGE:pattern=SOUND_ACKNOWLEDGE;count=sizeof(SOUND_ACKNOWLEDGE)/sizeof(*SOUND_ACKNOWLEDGE);break;
+    case EXCITED:pattern=SOUND_EXCITED;count=sizeof(SOUND_EXCITED)/sizeof(*SOUND_EXCITED);break;
+    case CONFUSED:pattern=SOUND_CONFUSED;count=sizeof(SOUND_CONFUSED)/sizeof(*SOUND_CONFUSED);break;
+    case WARNING:pattern=SOUND_WARNING;count=sizeof(SOUND_WARNING)/sizeof(*SOUND_WARNING);break;
+    case GOODBYE:pattern=SOUND_GOODBYE;count=sizeof(SOUND_GOODBYE)/sizeof(*SOUND_GOODBYE);break;
+    default:pattern=nullptr;count=0;break;
+  }
+}
+void startSound(Sound id){mood=SILENT;sound=id;soundStep=0;soundToneAt=0;soundStepRunning=false;soundActive=true;setTone(0);}
 void audioTick(uint32_t now){
+  if(soundActive){
+    const ToneStep *pattern=nullptr;uint8_t count=0;soundPattern(sound,pattern,count);
+    if(!pattern || soundStep>=count){setTone(0);soundActive=false;soundStepRunning=false;return;}
+    if(!soundStepRunning){setTone(pattern[soundStep].hz);soundToneAt=now;soundStepRunning=true;return;}
+    if((uint32_t)(now-soundToneAt)<pattern[soundStep].durationMs)return;
+    soundStep++;soundStepRunning=false;
+    if(soundStep>=count){setTone(0);soundActive=false;return;}
+    setTone(pattern[soundStep].hz);soundToneAt=now;soundStepRunning=true;return;
+  }
   if(mood==SILENT)return;
   if(toneAt && (uint32_t)(now-toneAt)<((mood==TALK)?(step%2?45:25):(mood==BOOT?85:mood==CURIOUS?65:mood==ALARM?100:30)))return;
   toneAt=now;
@@ -86,6 +133,7 @@ void onReceive(const esp_now_recv_info_t *info,const uint8_t *data,int len){
   Packet p;memcpy(&p,data,sizeof(p));
   if(!validPacket(p))return;
   if(p.type==COMMAND){if(p.mood>BOOT)return;}
+  else if(p.type==SOUND_COMMAND){if(p.mood>=SOUND_COUNT)return;}
   else if(p.type==LIGHT_COMMAND){if(!ENABLE_ILLUMINATION || p.reserved[0]>1)return;}
   else return;
   portENTER_CRITICAL(&commandMux);
@@ -119,14 +167,22 @@ void loop(){
     // Only accept commands from the first controller; reboot to change controller.
     if(!controllerKnown){memcpy(lastController,src,6);controllerKnown=true;}
     if(memcmp(src,lastController,6)==0){
-      if(cmd.type==COMMAND)startMood((Mood)cmd.mood);
-      else {illuminationOn=cmd.reserved[0]==1;digitalWrite(ILLUMINATION_PIN,illuminationOn?HIGH:LOW);}
-      if(!esp_now_is_peer_exist(src)){
-        esp_now_peer_info_t peer{};memcpy(peer.peer_addr,src,6);peer.channel=CHANNEL;peer.encrypt=false;
-        esp_now_add_peer(&peer);
+      bool fresh=cmd.type!=SOUND_COMMAND || acceptSoundSequence(cmd.sample_age_ms,cmd.sequence);
+      if(fresh){
+        bool accepted=true;
+        if((cmd.type==COMMAND || cmd.type==SOUND_COMMAND) && obstacle)accepted=false;
+        else if(cmd.type==COMMAND)startMood((Mood)cmd.mood);
+        else if(cmd.type==SOUND_COMMAND)startSound((Sound)cmd.mood);
+        else {illuminationOn=cmd.reserved[0]==1;digitalWrite(ILLUMINATION_PIN,illuminationOn?HIGH:LOW);}
+        if(accepted){
+          if(!esp_now_is_peer_exist(src)){
+            esp_now_peer_info_t peer{};memcpy(peer.peer_addr,src,6);peer.channel=CHANNEL;peer.encrypt=false;
+            esp_now_add_peer(&peer);
+          }
+          Packet ack{};ack.magic=MAGIC;ack.version=VERSION;ack.type=cmd.type==COMMAND?ACK:(cmd.type==SOUND_COMMAND?SOUND_ACK:LIGHT_ACK);ack.reserved[0]=illuminationOn?1:0;ack.sequence=cmd.sequence;ack.sample_age_ms=cmd.type==SOUND_COMMAND?cmd.sample_age_ms:0;ack.mood=cmd.mood;
+          esp_now_send(src,(uint8_t*)&ack,sizeof(ack));
+        }
       }
-      Packet ack{};ack.magic=MAGIC;ack.version=VERSION;ack.type=cmd.type==COMMAND?ACK:LIGHT_ACK;ack.reserved[0]=illuminationOn?1:0;ack.sequence=cmd.sequence;ack.mood=cmd.mood;
-      esp_now_send(src,(uint8_t*)&ack,sizeof(ack));
     }
   }
   audioTick(now);
@@ -141,6 +197,7 @@ void loop(){
       uint16_t raw=total/8;p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
     }
     if(ENABLE_ILLUMINATION)p.flags|=FLAG_ILLUMINATION;
+    p.flags|=FLAG_SOUND;
     if(illuminationOn)p.flags|=FLAG_LED_ON;
     if(radioReady)esp_now_send(BROADCAST,(uint8_t*)&p,sizeof(p));
   }

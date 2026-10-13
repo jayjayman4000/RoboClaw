@@ -254,6 +254,17 @@ Each CLI command exclusively opens its selected bridge and closes it on exit.
 Stop robot run before robot mood; simultaneous CLI access is unsupported. Local AI chat is available with robot ai setup. Driver capability metadata now exposes the mood action for
 future agent integration; this does not authorize or implement other outputs.
 
+## BB-2e droid language
+
+The droid-language extension adds a fixed vocabulary of passive-piezo phrases transported Raspberry Pi USB serial → body ESP32-S3 → ESP-NOW channel 1 → head ESP32-S3 → GPIO4 buzzer. Flash both matching sketches under `firmware/BB8-v2.2`, then detect and enable the extension:
+
+```bash
+robot hardware setup BodyModule
+robot sound BodyModule hello
+```
+
+Available names: `hello`, `yes`, `no`, `question`, `acknowledge`, `excited`, `confused`, `warning`, and `goodbye`. Each request is sent once and succeeds only after a matching head acknowledgment. The head plays every phrase with a non-blocking tone state machine, so TFmini sampling and radio telemetry continue during sound output. See `firmware/BB8-v2.2/README.md` for the protocol and bench-test limits.
+
 ## Local AI terminal chat (Ollama)
 
 Install [Ollama for Windows](https://ollama.com/download/windows), keep it running,

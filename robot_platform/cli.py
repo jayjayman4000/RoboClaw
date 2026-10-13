@@ -75,6 +75,11 @@ def main(argv=None):
     from .bb8_bridge import MOODS
     mood.add_argument("mood", choices=MOODS)
     mood.add_argument("--timeout", type=float, default=5)
+    sound = sub.add_parser("sound", help="Send one BB8 droid-language sound and wait for head acknowledgment")
+    sound.add_argument("name")
+    from .bb8_bridge import SOUNDS
+    sound.add_argument("sound", choices=SOUNDS)
+    sound.add_argument("--timeout", type=float, default=5)
     hardware = sub.add_parser("hardware", help="Detect and enable firmware hardware extensions")
     hardware_sub = hardware.add_subparsers(dest="hardware_verb",required=True)
     hardware_setup = hardware_sub.add_parser("setup")
@@ -256,16 +261,19 @@ def main(argv=None):
             result=operate(config,args.name,args.verb,getattr(args,"state",None),args.timeout)
             emit(result)
             return 0 if result.get("usable",result.get("acknowledged",False)) else 1
-        if args.verb == "mood":
+        if args.verb in ("mood", "sound"):
             device = next((d for d in config["devices"] if d["name"] == args.name), None)
             if not device or device["driver"] != "bb8-v2" or not device.get("enabled", True):
-                raise ValueError("mood requires an enabled bb8-v2 device; esp32-json stays read-only")
+                raise ValueError(f"{args.verb} requires an enabled bb8-v2 device; esp32-json stays read-only")
+            if args.verb == "sound" and "droid_language" not in device.get("extensions", []):
+                raise ValueError("sound requires the droid_language extension")
             from .setup import settings
             cls = drivers["bb8-v2"]
             options = {k: device[k] for k in cls.fields if k in device}
             driver = cls({**device, **settings(cls, options, interactive=False)})
             devices[args.name] = driver
-            result = driver.command({"action": "mood", "mood": args.mood, "timeout": args.timeout})
+            action = {"action": args.verb, args.verb: getattr(args, args.verb), "timeout": args.timeout}
+            result = driver.command(action)
             emit(result)
             return 0 if result["acknowledged"] else 1
         if args.verb == "test":
