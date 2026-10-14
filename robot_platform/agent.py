@@ -1,5 +1,6 @@
 """Bounded local-model agent with explicit observation and buzzer tools."""
 import json
+import math
 import threading
 import time
 from collections import deque
@@ -28,6 +29,44 @@ Send a buzzer mood only when the user requests it. Never claim successful execut
 without acknowledged:true. Acknowledgment reports head processing, not completion
 or independently verified audible sound. Do not say you drove, turned or saw an
 object. Keep answers concise and explain command failures clearly.'''
+
+MOTION_OUTCOME_MAX_BYTES=2048
+_MOTION_OUTCOME_UNKNOWN={
+    'outcome_unknown':True,
+    'error':'Motion was dispatched, but its outcome could not be confirmed',
+}
+
+
+def _bounded_json_value(value,depth=0,budget=None):
+    if budget is None:budget=[64]
+    if depth>4 or budget[0]<=0:return False
+    budget[0]-=1
+    if value is None or type(value) is bool:return True
+    if type(value) is str:return len(value)<=512
+    if type(value) is int:return abs(value)<=10**15
+    if type(value) is float:return math.isfinite(value)
+    if type(value) is list:
+        return len(value)<=16 and all(_bounded_json_value(item,depth+1,budget) for item in value)
+    if type(value) is dict:
+        return (len(value)<=16
+                and all(type(key) is str and 0<len(key)<=64 for key in value)
+                and all(_bounded_json_value(item,depth+1,budget) for item in value.values()))
+    return False
+
+
+def _tool_result_json(result):
+    return json.dumps(result,allow_nan=False)
+
+
+def _normalize_motion_outcome(result):
+    if (type(result) is not dict or type(result.get('accepted')) is not bool
+            or 'outcome_unknown' in result or not _bounded_json_value(result)):
+        return dict(_MOTION_OUTCOME_UNKNOWN)
+    try:encoded=_tool_result_json(result)
+    except (TypeError,ValueError,OverflowError):return dict(_MOTION_OUTCOME_UNKNOWN)
+    if len(encoded.encode('utf-8'))>MOTION_OUTCOME_MAX_BYTES:
+        return dict(_MOTION_OUTCOME_UNKNOWN)
+    return json.loads(encoded)
 
 
 class RobotRuntime:
@@ -87,6 +126,29 @@ class RobotRuntime:
             return self.devices[device].command({'action':'select_target','session_id':session_id,
                                                  'candidate_id':candidate_id})
 
+    def motion(self,device,motion,parameters,expected_fingerprint,dispatch_timeout_ms):
+        deadline=time.monotonic()+dispatch_timeout_ms/1000
+        with self.lock:
+            if time.monotonic()>=deadline:
+                return {'accepted':False,'error':'Motion command expired before dispatch'}
+            self.behaviors.pause(device)
+            if self.autonomy:self.autonomy.pause([device])
+            if time.monotonic()>=deadline:
+                return {'accepted':False,'error':'Motion command expired before dispatch'}
+            try:
+                from .embodiment import manifest_fingerprint, prepare_motion
+                command,manifest=prepare_motion(self.devices[device],motion,parameters)
+            except (KeyError,TypeError,ValueError):
+                return {'accepted':False,'error':'Robot motion manifest or parameters changed before dispatch'}
+            if manifest_fingerprint(manifest)!=expected_fingerprint:
+                return {'accepted':False,'error':'Robot motion manifest changed before dispatch'}
+            if time.monotonic()>=deadline:
+                return {'accepted':False,'error':'Motion command expired before dispatch'}
+            try:result=self.devices[device].command({**command,'deadline_monotonic':deadline})
+            except Exception:return dict(_MOTION_OUTCOME_UNKNOWN)
+            try:return _normalize_motion_outcome(result)
+            except Exception:return dict(_MOTION_OUTCOME_UNKNOWN)
+
     def behavior_state(self):
         with self.lock:return self.behaviors.state()
 
@@ -133,6 +195,13 @@ def tool_definitions(runtime, permissions=None):
                      'parameters':{'type':'object','properties':{'device':{'type':'string','enum':vision},
                      'session_id':{'type':'string'},'candidate_id':{'type':'integer','minimum':1}},
                      'required':['device','session_id','candidate_id'],'additionalProperties':False}}})
+    motion=permitted_devices(runtime.devices,permissions,'execute_motion')
+    if motion:
+        tools.append({'type':'function','function':{'name':'execute_motion',
+                     'description':'Execute one motion declared by the robot body capability manifest. Physical movement; limits are enforced by RoboClaw.',
+                     'parameters':{'type':'object','properties':{'device':{'type':'string','enum':motion},
+                     'motion':{'type':'string'},'parameters':{'type':'object'}},
+                     'required':['device','motion','parameters'],'additionalProperties':False}}})
     return tools
 
 
@@ -142,6 +211,23 @@ class Agent:
         self.permissions=policy({"ai_capabilities":permissions or {}})
         self.tools=tool_definitions(runtime,self.permissions)
         self.history=deque(maxlen=6)
+        self._motion_authorizations={}
+
+    def _authorize_observed_motion_devices(self,state,internal_manifests,observation_started_at):
+        self._motion_authorizations={}
+        observed=state.get('devices',{})
+        body=state.get('body_capabilities',{}).get('devices',{})
+        if not isinstance(observed,dict) or not isinstance(body,dict):return
+        for device,row in observed.items():
+            if device not in body or not isinstance(row,dict) or row.get('health')!='ok':continue
+            observation=row.get('observation')
+            if not isinstance(observation,dict):continue
+            if 'usable' in observation and observation.get('usable') is not True:continue
+            manifest=internal_manifests.get(device)
+            if not isinstance(manifest,dict):continue
+            from .embodiment import manifest_fingerprint
+            fingerprint=manifest_fingerprint(manifest)
+            self._motion_authorizations[device]=(observation_started_at,fingerprint)
 
     def execute(self,name,arguments,output_used):
         available=permitted_devices(self.runtime.devices,self.permissions,name) if name in ACTIONS else []
@@ -152,9 +238,19 @@ class Agent:
         if not isinstance(arguments,dict):return {'error':'Tool arguments must be an object'}
         if name=='read_robot_state':
             if arguments:return {'error':'read_robot_state takes no arguments'}
+            observation_started_at=time.monotonic()
             state=self.runtime.state()
-            if set(available)==set(self.runtime.devices):return state
-            return {'simulation':state.get('simulation'), 'devices':{n:v for n,v in state.get('devices',{}).items() if n in available},'body_pose':None,'head_pose':None}
+            from .embodiment import body_capabilities_with_internal
+            body,internal_manifests=body_capabilities_with_internal(self.runtime.devices)
+            state={**state,'body_capabilities':body}
+            if set(available)!=set(self.runtime.devices):
+                visible={n:v for n,v in state.get('devices',{}).items() if n in available}
+                body=state['body_capabilities']
+                body={'devices':{n:v for n,v in body.get('devices',{}).items() if n in available}}
+                state={'simulation':state.get('simulation'), 'devices':visible,
+                       'body_capabilities':body,'body_pose':None,'head_pose':None}
+            self._authorize_observed_motion_devices(state,internal_manifests,observation_started_at)
+            return state
         if name=='set_illumination':
             if set(arguments)!={'device','on'} or not isinstance(arguments.get('device'),str) or arguments['device'] not in available or type(arguments.get('on')) is not bool:
                 return {'error':'Expected supported device and boolean on'}
@@ -193,11 +289,37 @@ class Agent:
             try:result=self.runtime.select_target(device,session_id,candidate_id)
             except Exception as error:result={'error':str(error),'acknowledged':False}
             self.trace('[vision-selection] '+json.dumps(result));return result
+        if name=='execute_motion':
+            if set(arguments)!={'device','motion','parameters'}:
+                return {'error':'Expected only device, motion and parameters'}
+            device=arguments.get('device')
+            motion=arguments.get('motion')
+            if not isinstance(device,str) or device not in available or not isinstance(motion,str):
+                return {'error':'Invalid motion device or name'}
+            try:
+                from .embodiment import manifest_fingerprint, prepare_motion
+                command,manifest=prepare_motion(self.runtime.devices[device],motion,arguments.get('parameters'))
+            except (TypeError,ValueError) as error:
+                return {'error':str(error)}
+            authorization=self._motion_authorizations.get(device)
+            freshness=manifest['decision_freshness_ms']/1000
+            if authorization is None or time.monotonic()-authorization[0]>freshness:
+                return {'error':'Read current robot state before moving; the prior state is stale or missing'}
+            fingerprint=manifest_fingerprint(manifest)
+            if fingerprint!=authorization[1]:
+                return {'error':'Robot motion manifest changed after the state read; read current state again'}
+            if output_used[0]:return {'error':'One output request allowed per user turn; not repeated'}
+            output_used[0]=True
+            try:result=self.runtime.motion(device,motion,arguments['parameters'],authorization[1],manifest['dispatch_timeout_ms'])
+            except Exception:
+                result={'accepted':False,'error':'Motion was not dispatched due to a local runtime error'}
+            self.trace('[motion] '+json.dumps(result,allow_nan=False));return result
         return {'error':'Unknown tool; no action executed'}
 
     def turn(self,text,debug=False):
         if not isinstance(text,str) or not text.strip() or len(text)>8000:
             raise ValueError('Enter a message between 1 and 8000 characters')
+        self._motion_authorizations={}
         messages=[{'role':'system','content':SYSTEM+'\nEnabled tools: '+', '.join(t['function']['name'] for t in self.tools)+'\nIf a needed tool is absent or access is denied, say unavailable. Do not use historical readings as current.\nSelected devices: '+', '.join(self.runtime.devices)}]
         for turn in self.history:messages.extend(turn)
         start=len(messages)
@@ -220,7 +342,7 @@ class Agent:
                 arguments=fn.get('arguments',{}) if isinstance(fn,dict) else {}
                 result=self.execute(name,arguments,output_used)
                 if debug:self.trace('[tool] '+json.dumps({'name':name,'arguments':arguments,'result':result}))
-                tool_result={'role':'tool','tool_name':str(name),'content':json.dumps(result,allow_nan=False)}
+                tool_result={'role':'tool','tool_name':str(name),'content':_tool_result_json(result)}
                 if isinstance(call,dict) and call.get('id'):tool_result['tool_call_id']=call['id']
                 messages.append(tool_result)
         raise ValueError('No final answer')

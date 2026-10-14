@@ -7,6 +7,8 @@ ACTIONS = {
     'set_buzzer_mood': {'description':'Request a supported buzzer mood','driver_capability':'mood'},
     'select_target': {'description':'Select one current anonymous visual candidate for software tracking only',
                       'driver_capability':'target_selection','default_enabled':False},
+    'execute_motion': {'description':'Execute one declared, bounded physical motion',
+                       'driver_capability':'motion','default_enabled':False},
 }
 
 
@@ -30,12 +32,17 @@ def allowed(settings, action, device=None):
     if action not in ACTIONS:return False
     default=ACTIONS[action].get('default_enabled',True)
     if not settings.get('actions',{}).get(action,default):return False
-    return device is None or settings.get('devices',{}).get(device,{}).get(action,True)
+    if device is None:return True
+    device_default = False if action == 'execute_motion' else True
+    return settings.get('devices',{}).get(device,{}).get(action,device_default)
 
 
 def supported(driver, action):
     requirement = ACTIONS[action]['driver_capability']
     if action=='select_target' and getattr(driver,'kind',None)!='sensor':return False
+    if action=='execute_motion':
+        from .embodiment import motion_manifest
+        return motion_manifest(driver) is not None
     return requirement is None or bool(getattr(driver,'capabilities',{}).get(requirement))
 
 
@@ -73,12 +80,13 @@ def configure(path, config, save, drivers):
     updated = config
     print('AI action permissions. Global disable overrides all per-device permissions.')
     for row in settings['actions']:
-        enabled = yes(f"Allow AI action {row['action']}? {row['description']}")
+        motion = row['action'] == 'execute_motion'
+        enabled = yes(f"Allow AI action {row['action']}? {row['description']}", default=not motion)
         updated = set_permission(updated,row['action'],enabled)
         if enabled:
             for item in row['devices']:
                 if item['available']:
-                    updated = set_permission(updated,row['action'],yes(f"Allow {row['action']} for {item['device']}?"),item['device'])
+                    updated = set_permission(updated,row['action'],yes(f"Allow {row['action']} for {item['device']}?", default=not motion),item['device'])
     if not yes('Save AI action permissions?'):
         print('Cancelled. Permissions unchanged.');return False
     save(path,updated)
