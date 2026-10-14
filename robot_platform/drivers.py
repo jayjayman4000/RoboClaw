@@ -40,6 +40,31 @@ class SimRange(Driver):
 class SimMotor(Driver):
     simulation = True
     kind = "motor"
+    capabilities = {
+        "motion": {
+            "decision_freshness_ms": 1000,
+            "dispatch_timeout_ms": 100,
+            "motions": {
+                "set_speed": {
+                    "description": "Set normalized simulated drive speed",
+                    "interruptible": True,
+                    "parameters": {
+                        "value": {
+                            "type": "number",
+                            "minimum": -1.0,
+                            "maximum": 1.0,
+                            "units": "normalized",
+                        }
+                    },
+                },
+                "stop": {
+                    "description": "Stop the simulated drive",
+                    "interruptible": True,
+                    "parameters": {},
+                },
+            },
+        }
+    }
     def __init__(self, config):
         super().__init__(config)
         self.speed = 0.0
