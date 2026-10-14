@@ -124,7 +124,8 @@ def main(argv=None):
     caps_sub.add_parser("setup")
     for verb in ("enable", "disable"):
         cap = caps_sub.add_parser(verb)
-        cap.add_argument("action", choices=["read_robot_state", "set_buzzer_mood", "set_illumination"])
+        from .capabilities import ACTIONS
+        cap.add_argument("action", choices=list(ACTIONS))
         cap.add_argument("--device")
     ai = sub.add_parser("ai", help="Configure local, remote or hosted AI")
     ai_sub = ai.add_subparsers(dest="ai_verb", required=True)

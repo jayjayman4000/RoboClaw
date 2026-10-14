@@ -5,6 +5,8 @@ ACTIONS = {
     'read_robot_state': {'description':'Read live sensor observations and connection health','driver_capability':None},
     'set_illumination': {'description':'Turn configured illumination on or off','driver_capability':'illumination'},
     'set_buzzer_mood': {'description':'Request a supported buzzer mood','driver_capability':'mood'},
+    'select_target': {'description':'Select one current anonymous visual candidate for software tracking only',
+                      'driver_capability':'target_selection','default_enabled':False},
 }
 
 
@@ -26,12 +28,14 @@ def policy(config):
 
 def allowed(settings, action, device=None):
     if action not in ACTIONS:return False
-    if not settings.get('actions',{}).get(action,True):return False
+    default=ACTIONS[action].get('default_enabled',True)
+    if not settings.get('actions',{}).get(action,default):return False
     return device is None or settings.get('devices',{}).get(device,{}).get(action,True)
 
 
 def supported(driver, action):
     requirement = ACTIONS[action]['driver_capability']
+    if action=='select_target' and getattr(driver,'kind',None)!='sensor':return False
     return requirement is None or bool(getattr(driver,'capabilities',{}).get(requirement))
 
 

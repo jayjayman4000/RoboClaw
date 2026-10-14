@@ -37,7 +37,7 @@ class CapabilityTest(unittest.TestCase):
         original={'devices':[{'name':'BodyModule','driver':'bridge'}],'ai_backend':{'mode':'remote'}}
         changed=set_permission(original,'set_buzzer_mood',False,'BodyModule')
         self.assertNotIn('ai_capabilities',original);self.assertEqual(changed['ai_backend'],original['ai_backend'])
-        with patch('builtins.input',side_effect=['n','n','n','n']),redirect_stdout(StringIO()):
+        with patch('builtins.input',side_effect=['n','n','n','n','n']),redirect_stdout(StringIO()):
             self.assertFalse(configure('unused',original,lambda *a:self.fail('Unexpected save'),{'bridge':Driver}))
     def test_cli_disable_persists_without_opening_devices(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -50,3 +50,19 @@ class CapabilityTest(unittest.TestCase):
         agent=Agent(None,runtime,permissions={'devices':{'range':{'set_buzzer_mood':True}}})
         self.assertEqual(len(agent.tools),1)
         self.assertIn('error',agent.execute('set_buzzer_mood',{'device':'range','mood':'happy'},[False]))
+
+    def test_target_selection_is_explicit_and_capability_gated(self):
+        class Vision:
+            kind='sensor';capabilities={'target_selection':True}
+        runtime=Runtime();runtime.devices={'Vision':Vision()}
+        self.assertNotIn('select_target',[t['function']['name'] for t in Agent(None,runtime).tools])
+        enabled=Agent(None,runtime,permissions={'actions':{'select_target':True}})
+        self.assertIn('select_target',[t['function']['name'] for t in enabled.tools])
+        unsupported=Runtime();unsupported.devices={'range':object()}
+        self.assertNotIn('select_target',[t['function']['name'] for t in Agent(None,unsupported,permissions={'actions':{'select_target':True}}).tools])
+        self.assertFalse(allowed({},'select_target','Vision'))
+        self.assertTrue(allowed({'actions':{'select_target':True}},'select_target','Vision'))
+        class MotorVision:
+            kind='motor';capabilities={'target_selection':True}
+        motor=Runtime();motor.devices={'unsafe':MotorVision()}
+        self.assertNotIn('select_target',[t['function']['name'] for t in Agent(None,motor,permissions={'actions':{'select_target':True}}).tools])

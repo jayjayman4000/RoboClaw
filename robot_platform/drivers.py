@@ -61,8 +61,11 @@ class SimMotor(Driver):
 
 from .serial_driver import SerialTelemetry
 from .bb8_bridge import BB8Bridge
+from .vision_driver import VisionDriver
 
-BUILTINS = {"bb8-v2": BB8Bridge,"esp32-json": SerialTelemetry, "sim-camera": SimCamera, "sim-tfmini": SimRange, "sim-motor": SimMotor}
+BUILTINS = {"bb8-v2": BB8Bridge, "bb8-vision": VisionDriver,
+            "esp32-json": SerialTelemetry, "sim-camera": SimCamera,
+            "sim-tfmini": SimRange, "sim-motor": SimMotor}
 
 
 def registry():
