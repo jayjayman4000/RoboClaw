@@ -14,10 +14,11 @@ def choose(prompt, options):
         print('Please enter one of the listed numbers.')
 
 
-def yes(prompt):
+def yes(prompt, default=True):
     while True:
-        value = input(prompt + ' [Y/n]: ').strip().lower()
-        if value in ('', 'y', 'yes'): return True
+        value = input(prompt + (' [Y/n]: ' if default else ' [y/N]: ')).strip().lower()
+        if value == '': return default
+        if value in ('y', 'yes'): return True
         if value in ('n', 'no'): return False
         print('Enter yes or no.')
 

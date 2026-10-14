@@ -248,6 +248,9 @@ def main(argv=None):
             if args.cap_verb == "setup":
                 return 0 if configure(args.config, config, save, drivers) else 1
             if args.cap_verb in ("enable", "disable"):
+                if (args.cap_verb == "enable" and args.action == "execute_motion"
+                        and args.device is not None):
+                    config = set_permission(config, args.action, True)
                 config = set_permission(config, args.action, args.cap_verb == "enable", args.device)
                 save(args.config, config)
                 print("Saved. Restart chat to apply the new permissions.")

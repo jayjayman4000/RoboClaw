@@ -82,6 +82,48 @@ Optional local AI chat uses Ollama. Run `robot` with no arguments to open setup.
 to `~/.roboclaw/robot.json`; use `robot --config PATH ...` to select another file.
 Previously configured disabled hardware placeholders remain disabled.
 
+## Embodiment and physical motion
+
+RoboClaw is the bridge between an AI and a robot body. Drivers can publish a
+machine-readable motion manifest containing the motions they support, parameter
+units and hard ranges, whether motions are interruptible, the maximum age of the
+state used for a decision, and the local dispatch deadline. The manifest is
+included in `read_robot_state` results so the model sees the body's limits before
+requesting movement.
+
+Physical AI motion uses the `execute_motion` tool and is **disabled by default**.
+It appears only for motor drivers with a valid motion manifest and only after an
+operator enables it. RoboClaw validates a closed, size-bounded manifest (at most
+32 motions and 16 numeric parameters per motion), limits decision freshness to
+1–10,000 ms and dispatch timeout to 1–1,000 ms, and rejects non-finite or
+incomplete ranges. Movement requires a healthy current state row for the same
+read-permitted target device in the same AI turn; an explicitly unusable row or
+a manifest change requires another read. RoboClaw rechecks the dispatch deadline
+after pausing competing autonomous behavior and immediately before invoking the
+driver. Driver outcomes are JSON-normalized to 2 KiB; malformed, oversized, or
+exceptional post-dispatch outcomes report `outcome_unknown: true` and are never
+automatically retried. Drivers remain responsible for hardware-level watchdogs,
+limit switches, stabilization and emergency stopping.
+
+Motion requires both the global and per-device permission gates. The explicit
+`robot capabilities enable execute_motion --device DEVICE` command enables both
+for that device. Global enable without `--device` grants no device, and devices
+added later remain disabled until explicitly approved.
+
+The built-in `sim-motor` exercises this contract without hardware:
+
+```bash
+robot init test-droid
+robot add motor drive --driver sim-motor
+robot capabilities enable execute_motion --device drive
+robot chat --device drive --debug
+```
+
+This first slice proves body-description and latency-aware motion dispatch. It
+does not add a physical BB8 motor driver or claim that BB8's still-undefined
+motor ranges are safe. Isaac Sim animation manifests and hardware adapters can
+use the same bounded motion contract in later slices.
+
 ## Driver plugins
 
 Install trusted plugin packages into RoboClaw's `.venv`, then restart the CLI.
@@ -99,9 +141,13 @@ and optionally `health`. `close()` releases resources; it is called on exit.
 `command(action)` is optional. Configuration fields use `type` (`str`, `int`,
 `float`), `required`, `default`, `min` and `max`; see `SerialTelemetry.fields`.
 Drivers must keep observations bounded and handle their transport timeouts.
-Plugin discovery imports installed code; it is not a sandbox. An adapter's own
-commands determine hardware behavior. This release does not provide an actuator
-safety contract or isolation for blocking third-party drivers.
+A motor driver may expose `capabilities.motion` with `decision_freshness_ms`,
+`dispatch_timeout_ms`, and named motions whose parameter definitions include type,
+units, minimum and maximum values. Only validated manifests can create the
+permission-gated `execute_motion` AI tool. Plugin discovery imports installed code;
+it is not a sandbox, and RoboClaw cannot make a malicious driver safe. Blocking
+third-party drivers are not process-isolated, so their own hardware watchdog must
+still stop motion if host communication is lost.
 
 ## Verification
 
