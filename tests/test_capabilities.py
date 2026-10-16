@@ -54,13 +54,13 @@ class CapabilityTest(unittest.TestCase):
         original={'devices':[{'name':'BodyModule','driver':'bridge'}],'ai_backend':{'mode':'remote'}}
         changed=set_permission(original,'set_buzzer_mood',False,'BodyModule')
         self.assertNotIn('ai_capabilities',original);self.assertEqual(changed['ai_backend'],original['ai_backend'])
-        with patch('builtins.input',side_effect=['n','n','n','n','n','n']),redirect_stdout(StringIO()):
+        with patch('builtins.input',side_effect=['n','n','n','n','n','n','n']),redirect_stdout(StringIO()):
             self.assertFalse(configure('unused',original,lambda *a:self.fail('Unexpected save'),{'bridge':Driver}))
 
     def test_interactive_motion_global_permission_defaults_no(self):
         config={'schema_version':1,'devices':[{'name':'drive','driver':'sim-motor'}]}
         saved=[]
-        answers=['n','n','n','n','','','y']
+        answers=['n','n','n','n','n','','y']
         with patch('builtins.input',side_effect=answers),redirect_stdout(StringIO()):
             self.assertTrue(configure('unused',config,lambda path,value:saved.append(value),{'sim-motor':SimMotor}))
         self.assertFalse(saved[0]['ai_capabilities']['actions']['execute_motion'])
@@ -68,7 +68,7 @@ class CapabilityTest(unittest.TestCase):
     def test_interactive_motion_device_permission_defaults_no(self):
         config={'schema_version':1,'devices':[{'name':'drive','driver':'sim-motor'}]}
         saved=[]
-        answers=['n','n','n','n','y','','y']
+        answers=['n','n','n','n','n','y','','y']
         with patch('builtins.input',side_effect=answers),redirect_stdout(StringIO()):
             self.assertTrue(configure('unused',config,lambda path,value:saved.append(value),{'sim-motor':SimMotor}))
         permissions=saved[0]['ai_capabilities']

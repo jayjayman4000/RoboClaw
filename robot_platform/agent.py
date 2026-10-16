@@ -4,7 +4,7 @@ import math
 import threading
 import time
 from collections import deque
-from .bb8_bridge import MOODS
+from .bb8_bridge import MOODS, HEADLAMP_MODES, HEADLAMP_COLORS, headlamp_request
 from .capabilities import ACTIONS, policy, permitted_devices
 
 SYSTEM = '''You are RoboClaw, the terminal assistant for a configured robot.
@@ -23,8 +23,9 @@ Report fresh light_percent as relative brightness; lack of lux calibration is NO
 reason to refuse a reading or ask permission to read it.
 Ambient light is a relative ADC reading, not calibrated lux. Use light_usable for light
 freshness independently of LiDAR usable. illumination_state_usable indicates whether
-the reported GPIO state is fresh. Illumination acknowledgment does not verify
-emitted light or camera visibility. Set illumination only when explicitly requested.
+the reported GPIO state is fresh. Illumination acknowledgment does not verify emitted light or camera visibility.
+The generic headlamp tool may be used for bounded visual expression when relevant;
+choose the behavior at decision time and do not assign fixed meanings in firmware.
 Send a buzzer mood only when the user requests it. Never claim successful execution
 without acknowledged:true. Acknowledgment reports head processing, not completion
 or independently verified audible sound. Do not say you drove, turned or saw an
@@ -165,6 +166,12 @@ class RobotRuntime:
     def autonomy_state(self):
         return self.autonomy.state() if self.autonomy else {"enabled":False}
 
+    def headlamp(self,device,request):
+        with self.lock:
+            self.behaviors.pause(device)
+            if self.autonomy:self.autonomy.pause([device])
+            return self.devices[device].command({'action':'headlamp',**request,'timeout':5})
+
     def close(self):
         self.stop.set()
         if self.autonomy:self.autonomy.close()
@@ -188,6 +195,14 @@ def tool_definitions(runtime, permissions=None):
     if illumination:
         tools.append({'type':'function','function':{'name':'set_illumination','description':'Turn configured head illumination on/off only when requested; returns head processing acknowledgment.',
                      'parameters':{'type':'object','properties':{'device':{'type':'string','enum':illumination},'on':{'type':'boolean'}},'required':['device','on'],'additionalProperties':False}}})
+    headlamps=permitted_devices(runtime.devices,permissions,'set_headlamp')
+    if headlamps:
+        tools.append({'type':'function','function':{'name':'set_headlamp','description':'Select a bounded generic headlamp behavior. Auto takes no optional fields; off needs duration_s; steady needs color, brightness_percent and duration_s; breathe/blink also need period_ms.',
+                     'parameters':{'type':'object','properties':{
+                         'device':{'type':'string','enum':headlamps},'mode':{'type':'string','enum':list(HEADLAMP_MODES)},
+                         'color':{'type':'string','enum':list(HEADLAMP_COLORS)},'brightness_percent':{'type':'integer','minimum':1,'maximum':100},
+                         'period_ms':{'type':'integer','minimum':300,'maximum':5000},'duration_s':{'type':'integer','minimum':1,'maximum':300}},
+                         'required':['device','mode'],'additionalProperties':False}}})
     vision=permitted_devices(runtime.devices,permissions,'select_target')
     if vision:
         tools.append({'type':'function','function':{'name':'select_target',
@@ -202,6 +217,7 @@ def tool_definitions(runtime, permissions=None):
                      'parameters':{'type':'object','properties':{'device':{'type':'string','enum':motion},
                      'motion':{'type':'string'},'parameters':{'type':'object'}},
                      'required':['device','motion','parameters'],'additionalProperties':False}}})
+
     return tools
 
 
@@ -259,6 +275,17 @@ class Agent:
             try:result=self.runtime.illumination(arguments['device'],arguments['on'])
             except Exception as error:result={'error':str(error),'acknowledged':False}
             self.trace('[illumination] '+json.dumps(result));return result
+        if name=='set_headlamp':
+            device=arguments.get('device')
+            if not isinstance(device,str) or device not in available:return {'error':'Unsupported headlamp device'}
+            request={k:v for k,v in arguments.items() if k!='device'}
+            try:headlamp_request({'action':'headlamp',**request})
+            except ValueError as error:return {'error':str(error)}
+            if output_used[0]:return {'error':'One output request allowed per user turn; not repeated'}
+            output_used[0]=True
+            try:result=self.runtime.headlamp(device,request)
+            except Exception as error:result={'error':str(error),'acknowledged':False}
+            self.trace('[headlamp] '+json.dumps(result));return result
         if name=='set_buzzer_mood':
             if set(arguments)!= {'device','mood'}:return {'error':'Expected only device and mood'}
             device,mood=arguments['device'],arguments['mood']

@@ -300,6 +300,17 @@ Each CLI command exclusively opens its selected bridge and closes it on exit.
 Stop robot run before robot mood; simultaneous CLI access is unsupported. Local AI chat is available with robot ai setup. Driver capability metadata now exposes the mood action for
 future agent integration; this does not authorize or implement other outputs.
 
+## BB-2e droid language
+
+The droid-language extension adds a fixed vocabulary of passive-piezo phrases transported Raspberry Pi USB serial → body ESP32-S3 → ESP-NOW channel 1 → head ESP32-S3 → GPIO4 buzzer. Flash both matching sketches under `firmware/BB8-v2.2`, then detect and enable the extension:
+
+```bash
+robot hardware setup BodyModule
+robot sound BodyModule hello
+```
+
+Available names: `hello`, `yes`, `no`, `question`, `acknowledge`, `excited`, `confused`, `warning`, and `goodbye`. Each request is sent once and succeeds only after a matching head acknowledgment. The head plays every phrase with a non-blocking tone state machine, so TFmini sampling and radio telemetry continue during sound output. See `firmware/BB8-v2.2/README.md` for the protocol and bench-test limits.
+
 ## Local AI terminal chat (Ollama)
 
 Install [Ollama for Windows](https://ollama.com/download/windows), keep it running,
@@ -491,19 +502,22 @@ systemctl --user start roboclaw-monitor.service
 
 The service does not inherit API keys exported in a separate terminal. If using a hosted provider, configure its key in the user service environment before starting it; never commit keys to the unit or repository. Tailscale must already be installed, signed in and allowed to connect on both hosts; the monitor never installs software, changes firewall rules or authenticates unattended. Windows can run `robot watch` directly; generated systemd units target Linux only.
 
-### Add a head light sensor and illumination output
+### Add ambient flashlight and AI-selectable headlamp behavior
 
-For the bare photoresistor on GPIO1 and test LED on GPIO5, use the [BB8-v2.2 firmware and wiring guide](firmware/BB8-v2.2/README.md). Flash its HeadModule6 and BodyModule6 sketches; then run `robot hardware setup BodyModule`. This detects firmware-supported features, offers enable/disable choices and saves them into the existing bridge configuration. Normal robot setup also offers feature detection for BB8 bridges.
+For the photoresistor on GPIO1 and 24-pixel ring DIN on GPIO5, use the [BB8-v2.2 firmware and wiring guide](firmware/BB8-v2.2/README.md). Flash its matching HeadModule6 and BodyModule6 sketches; then run `robot hardware setup BodyModule`. This detects firmware-supported features, offers enable/disable choices, and stores AI permissions separately from hardware availability.
 
 ```powershell
 robot light BodyModule
 robot illumination BodyModule on
 robot illumination BodyModule off
+robot headlamp BodyModule auto
+robot headlamp BodyModule steady --color red --brightness-percent 35 --duration-s 30
+robot headlamp BodyModule breathe --color blue --brightness-percent 30 --period-ms 2400 --duration-s 45
 robot capabilities list
 robot chat --device BodyModule --debug
 ```
 
-The light percentage is relative ADC scale, not calibrated lux. `light_usable` evaluates its freshness independently of LiDAR. `illumination_state_usable` marks fresh reported GPIO state; acknowledgment confirms head processing, not physical light output. New AI action `set_illumination` honors global/per-device permissions and the same one-output-per-turn bound as buzzer control. No automatic dark-triggered output is enabled. Existing v2.1 installations continue to support LiDAR and buzzer; light/illumination stay unavailable until firmware advertises them and you enable the extensions.
+The light percentage is relative ADC scale, not calibrated lux. In `auto`, darkness controls the white flashlight locally. RoboClaw's separate `set_headlamp` tool exposes only generic `auto`, `off`, `steady`, `breathe`, and `blink` primitives plus named color, bounded brightness, period, and duration. Personality code or the selected AI decides their meaning at runtime; the firmware contains no emotion-to-light mapping. Manual non-auto requests expire after 1–300 seconds and return to `auto`; firmware always caps NeoPixel brightness at 64/255. Commands are written once and require an exact matching acknowledgment, which confirms head processing but not visible light. Existing v2.1 installations retain LiDAR and buzzer support while headlamp tools remain unavailable until matching firmware advertises and setup enables them.
 
 ### Local darkness behavior (no firmware update)
 
@@ -694,7 +708,7 @@ robot live --device BodyModule --autonomous-ai
 robot chat --device BodyModule --debug --behaviors --autonomous-ai
 ```
 
-Setup saves `autonomous_ai.enabled`, `allow_buzzer`, `allow_illumination`, `allow_target_selection`,
+Setup saves `autonomous_ai.enabled`, `allow_buzzer`, `allow_illumination`, `allow_headlamp`, `allow_target_selection`,
 `decision_budget_s`, `min_interval_s` and `output_cooldown_s`. Defaults are off, no
 output permission, a 3-second event-to-decision budget, 2 seconds between requests,
 and 10 seconds between output attempts per device. Saved enablement and an explicit
@@ -720,7 +734,7 @@ from future camera/IMU perception adapters.
   remaining budget. Late results are discarded, rather than executed later.
 - Before dispatch, the runtime reads sensors again under the hardware lock. Newer
   events, changed range (>0.1m), changed light zone, sensor loss, pauses and shutdown
-  invalidate the decision. Illumination also requires fresh output state.
+  invalidate the decision. Illumination and headlamp choices also require fresh output state.
 - Failed requests back off (up to 60 seconds) and discard pending work. Outputs are
   never retried from a failed decision. Output cooldown includes failed writes.
 
@@ -734,8 +748,9 @@ real robot has been established by offline tests.
 #### Permissions and competing controllers
 
 The model must return exactly one validated `choose_action`: none, an allowed mood
-(`curious`, `happy`, `silent`), illumination on/off, or a current session-bound anonymous
-visual candidate. Extra/unknown arguments, multiple
+(`curious`, `happy`, `silent`), illumination on/off, one bounded generic headlamp
+primitive, or a current session-bound anonymous visual candidate. Headlamp primitives
+use mode/color/brightness/timing only; no emotion names are hard-coded. Extra/unknown arguments, multiple
 calls, unsupported hardware and denied actions are rejected. Autonomous output
 permissions **and** existing global/per-device AI tool permissions must both allow an
 action. Local configured lighting or spontaneous sound controllers retain ownership
@@ -743,7 +758,7 @@ of their outputs; those actions are excluded from AI choices to prevent competin
 requests. The AI can still decide to do nothing and report why.
 
 In chat, `/autonomy` shows runtime status and `/health` includes it. `/auto pause`
-and `/auto resume` control both local and AI autonomy. A requested mood/illumination
+and `/auto resume` control both local and AI autonomy. A requested mood/illumination/headlamp action
 pauses autonomous controls on that device. An operator turn suspends new autonomous
 inference and invalidates outstanding decisions; completion establishes fresh
 baselines rather than replaying events. Future voice activity detection should call
@@ -760,7 +775,8 @@ For explicitly enabled AI decisions at Pi startup:
 Enable the generated unit using the earlier systemd instructions. Do not run another
 serial-owning service simultaneously. Hosted keys must be supplied through the
 service environment. Remote AI failure does not stop local sensing/behaviors.
-No motors, navigation, speech synthesis or new firmware outputs are enabled here.
+No motors, navigation, or speech synthesis are enabled here. Headlamp autonomy remains
+off unless both `allow_headlamp` and the `set_headlamp` AI capability are enabled.
 
 ### BB8 V6 visual-attention bridge
 

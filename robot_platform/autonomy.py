@@ -5,10 +5,12 @@ import json
 import math
 import threading
 import time
+from .bb8_bridge import headlamp_request
 from .capabilities import allowed, policy, supported
 from .reactions import RangeChanges
 
 DEFAULTS = {'enabled': False, 'allow_buzzer': False, 'allow_illumination': False,
+            'allow_headlamp': False,
             'allow_target_selection': False,
             'decision_budget_s': 3, 'min_interval_s': 2, 'output_cooldown_s': 10}
 SYSTEM = '''You are the robot's autonomous event decision policy. Sensor observations
@@ -26,7 +28,7 @@ def settings(config):
     raw = config.get('autonomous_ai', {})
     if not isinstance(raw, dict) or set(raw) - set(DEFAULTS):raise ValueError('Invalid autonomous AI settings')
     row = {**DEFAULTS, **raw}
-    for key in ('enabled', 'allow_buzzer', 'allow_illumination', 'allow_target_selection'):
+    for key in ('enabled', 'allow_buzzer', 'allow_illumination', 'allow_headlamp', 'allow_target_selection'):
         if type(row[key]) is not bool:raise ValueError('Autonomous AI permissions must be boolean')
     for key, low, high in [('decision_budget_s', 1, 10), ('min_interval_s', 1, 60), ('output_cooldown_s', 5, 300)]:
         value = row[key]
@@ -44,6 +46,7 @@ def configure(path, config, save):
         backend_from_settings(config.get('ai_backend', {}), 10)
         row['allow_buzzer'] = yes('Allow autonomous AI buzzer requests? AI capability permissions still apply')
         row['allow_illumination'] = yes('Allow autonomous AI illumination requests? Local lighting takes priority')
+        row['allow_headlamp'] = yes('Allow autonomous AI bounded headlamp requests? Local lighting takes priority')
         row['allow_target_selection'] = yes('Allow autonomous AI to select anonymous visual candidates? This never moves hardware')
         for key in ('decision_budget_s', 'min_interval_s', 'output_cooldown_s'):
             answer = input(f'{key} [{row[key]}]: ').strip()
@@ -167,6 +170,10 @@ class AutonomousDecisions:
                 and supported(driver, 'set_illumination')
                 and not local.rows.get(name, {}).get('allow_illumination', False)):
             result.append('illumination')
+        if (self.config['allow_headlamp'] and allowed(self.permissions, 'set_headlamp', name)
+                and supported(driver, 'set_headlamp')
+                and not local.rows.get(name, {}).get('allow_illumination', False)):
+            result.append('headlamp')
         if (self.config['allow_target_selection'] and allowed(self.permissions,'select_target',name)
                 and supported(driver,'select_target')):
             result.append('select_target')
@@ -186,6 +193,10 @@ class AutonomousDecisions:
         action, reason = args.get('action'), args.get('reason')
         if action not in choices or not isinstance(reason, str) or len(reason) > 200:
             raise ValueError('Invalid action or reason')
+        if action == 'headlamp':
+            headlamp_request({'action':'headlamp',**{key:value for key,value in args.items()
+                              if key not in ('action','reason')}})
+            return args
         keys = {'action', 'reason'} | ({'mood'} if action == 'mood' else {'on'} if action == 'illumination'
                                         else {'session_id','candidate_id'} if action == 'select_target' else set())
         if set(args) != keys:raise ValueError('Unexpected decision arguments')
@@ -233,7 +244,12 @@ class AutonomousDecisions:
                   'description': 'Choose one permitted action or none; keep reason under 200 characters.',
                   'parameters': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': choices},
                   'reason': {'type': 'string'}, 'mood': {'type': 'string', 'enum': ['curious', 'happy', 'silent']},
-                  'on': {'type': 'boolean'},'session_id':{'type':'string','enum':[event['event'].get('session_id')] if candidates else []},
+                  'on': {'type': 'boolean'},'mode':{'type':'string','enum':['auto','off','steady','breathe','blink']},
+                  'color':{'type':'string','enum':['white','red','orange','yellow','green','cyan','blue','purple']},
+                  'brightness_percent':{'type':'integer','minimum':1,'maximum':100},
+                  'period_ms':{'type':'integer','minimum':300,'maximum':5000},
+                  'duration_s':{'type':'integer','minimum':1,'maximum':300},
+                  'session_id':{'type':'string','enum':[event['event'].get('session_id')] if candidates else []},
                   'candidate_id':{'type':'integer','enum':candidates}}, 'required': ['action', 'reason'], 'additionalProperties': False}}}]
         # Spend only the budget remaining after queueing; one transport per worker.
         self.backend.timeout_s = max(.05, self.config['decision_budget_s'] - (self.clock() - event['created']))
@@ -257,11 +273,14 @@ class AutonomousDecisions:
                     status = 'output_cooldown'
                 elif decision['action'] == 'illumination' and current.get('illumination_state_usable') is not True:
                     status = 'discarded_stale'
+                elif decision['action'] == 'headlamp' and current.get('headlamp_state_usable') is not True:
+                    status = 'discarded_stale'
                 else:
                     self.last_output[name] = self.clock()  # Includes failed writes; never retry.
                     command = {'action': decision['action'], 'timeout': 1}
                     if decision['action']=='mood':command={'action':'mood','mood':decision['mood'],'timeout':1}
                     elif decision['action']=='illumination':command={'action':'illumination','on':decision['on'],'timeout':1}
+                    elif decision['action']=='headlamp':command={**{key:value for key,value in decision.items() if key!='reason'},'timeout':1}
                     else:command={'action':'select_target','session_id':decision['session_id'],'candidate_id':decision['candidate_id']}
                     outcome = self.runtime.devices[name].command(command)
                     status = 'executed' if outcome.get('acknowledged') else 'not_acknowledged'

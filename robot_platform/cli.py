@@ -75,6 +75,11 @@ def main(argv=None):
     from .bb8_bridge import MOODS
     mood.add_argument("mood", choices=MOODS)
     mood.add_argument("--timeout", type=float, default=5)
+    sound = sub.add_parser("sound", help="Send one BB8 droid-language sound and wait for head acknowledgment")
+    sound.add_argument("name")
+    from .bb8_bridge import SOUNDS
+    sound.add_argument("sound", choices=SOUNDS)
+    sound.add_argument("--timeout", type=float, default=5)
     hardware = sub.add_parser("hardware", help="Detect and enable firmware hardware extensions")
     hardware_sub = hardware.add_subparsers(dest="hardware_verb",required=True)
     hardware_setup = hardware_sub.add_parser("setup")
@@ -87,6 +92,15 @@ def main(argv=None):
     illumination.add_argument("name")
     illumination.add_argument("state",choices=["on","off"])
     illumination.add_argument("--timeout",type=float,default=5)
+    headlamp = sub.add_parser("headlamp",help="Send one bounded addressable-headlamp request")
+    headlamp.add_argument("name")
+    from .bb8_bridge import HEADLAMP_MODES, HEADLAMP_COLORS
+    headlamp.add_argument("mode",choices=HEADLAMP_MODES)
+    headlamp.add_argument("--color",choices=HEADLAMP_COLORS)
+    headlamp.add_argument("--brightness-percent",type=int)
+    headlamp.add_argument("--period-ms",type=int)
+    headlamp.add_argument("--duration-s",type=int)
+    headlamp.add_argument("--timeout",type=float,default=5)
     behavior = sub.add_parser("behavior", help="Run a local darkness behavior; preview by default")
     behavior.add_argument("name")
     behavior.add_argument("--allow-illumination", action="store_true", help="Authorize automatic illumination writes for this session")
@@ -114,6 +128,7 @@ def main(argv=None):
     autonomy_sub = autonomy.add_subparsers(dest="autonomy_verb", required=True)
     autonomy_sub.add_parser("setup")
     autonomy_sub.add_parser("status")
+
     remove = sub.add_parser("remove")
     remove.add_argument("name")
     sub.add_parser("configure", help="Interactively add a device")
@@ -324,16 +339,26 @@ def main(argv=None):
             run_behavior(devices[args.name], args.name, emit, args.dark, args.bright,
                          args.hold, args.cooldown, args.allow_illumination, ticks=args.ticks)
             return 0
-        if args.verb == "mood":
+        if args.verb in ("mood", "sound", "headlamp"):
             device = next((d for d in config["devices"] if d["name"] == args.name), None)
             if not device or device["driver"] != "bb8-v2" or not device.get("enabled", True):
-                raise ValueError("mood requires an enabled bb8-v2 device; esp32-json stays read-only")
+                raise ValueError(f"{args.verb} requires an enabled bb8-v2 device; esp32-json stays read-only")
+            if args.verb == "sound" and "droid_language" not in device.get("extensions", []):
+                raise ValueError("sound requires the droid_language extension")
+            if args.verb == "headlamp" and "headlamp" not in device.get("extensions", []):
+                raise ValueError("headlamp requires the headlamp extension")
             from .setup import settings
             cls = drivers["bb8-v2"]
             options = {k: device[k] for k in cls.fields if k in device}
             driver = cls({**device, **settings(cls, options, interactive=False)})
             devices[args.name] = driver
-            result = driver.command({"action": "mood", "mood": args.mood, "timeout": args.timeout})
+            if args.verb=="headlamp":
+                action={"action":"headlamp","mode":args.mode,"timeout":args.timeout}
+                for key in ("color","brightness_percent","period_ms","duration_s"):
+                    value=getattr(args,key)
+                    if value is not None:action[key]=value
+            else:action = {"action": args.verb, args.verb: getattr(args, args.verb), "timeout": args.timeout}
+            result = driver.command(action)
             emit(result)
             return 0 if result["acknowledged"] else 1
         if args.verb == "test":

@@ -10,7 +10,7 @@ from robot_platform.agent import RobotRuntime
 def observation(distance=1, receipt='1', **changes):
     return {'distance_m': distance, 'usable': True, 'received_at': receipt,
             'light_percent': 60, 'light_usable': True, 'illumination_state_usable': True,
-            'illumination_on': False, **changes}
+            'illumination_on': False, 'headlamp_state_usable': True, **changes}
 
 
 def response(action='mood', **args):
@@ -20,7 +20,7 @@ def response(action='mood', **args):
 
 class Driver:
     kind = 'sensor'
-    capabilities = {'mood': True, 'illumination': True, 'target_selection': True}
+    capabilities = {'mood': True, 'illumination': True, 'headlamp': True, 'target_selection': True}
     def __init__(self):self.calls = []
     def command(self, action):
         self.calls.append(action);return {'acknowledged': True}
@@ -129,9 +129,34 @@ class AutonomyTests(unittest.TestCase):
         self.assertEqual(self.auto.decide(event)['status'], 'discarded_stale')
         self.assertEqual(self.driver.calls, [])
 
+    def test_autonomous_headlamp_selects_only_generic_bounded_parameters(self):
+        choice=response('headlamp',mode='breathe',color='blue',brightness_percent=35,period_ms=2400,duration_s=45)
+        event=self.make(Backend(choice),auto={'allow_headlamp':True})
+        self.assertIn('headlamp',self.auto.actions('range'))
+        self.assertEqual(self.auto.decide(event)['status'],'executed')
+        self.assertEqual(self.driver.calls,[{'action':'headlamp','mode':'breathe','color':'blue',
+                                             'brightness_percent':35,'period_ms':2400,'duration_s':45,'timeout':1}])
+        for invalid in [response('headlamp',mode='emotion',color='red',brightness_percent=30,duration_s=20),
+                        response('headlamp',mode='blink',color='red',brightness_percent=30,duration_s=20)]:
+            event=self.make(Backend(invalid),auto={'allow_headlamp':True})
+            with self.assertRaises(ValueError):self.auto.decide(event)
+            self.assertEqual(self.driver.calls,[])
+
+    def test_autonomous_headlamp_respects_permission_owner_and_fresh_state(self):
+        event=self.make(Backend(response('headlamp',mode='steady',color='red',brightness_percent=25,duration_s=20)),
+                        auto={'allow_headlamp':True})
+        self.runtime.behaviors.rows['range']={'allow_illumination':True}
+        self.assertNotIn('headlamp',self.auto.actions('range'))
+        self.make(auto={'allow_headlamp':False});self.assertNotIn('headlamp',self.auto.actions('range'))
+        event=self.make(Backend(response('headlamp',mode='steady',color='red',brightness_percent=25,duration_s=20)),
+                        auto={'allow_headlamp':True})
+        self.obs['headlamp_state_usable']=False
+        self.assertEqual(self.auto.decide(event)['status'],'discarded_stale')
+        self.assertEqual(self.driver.calls,[])
+
     def test_setup_cancellation_defaults_and_fast_backend(self):
         self.assertFalse(settings({})['enabled'])
-        for overrides in [{'enabled': 'y'}, {'decision_budget_s': float('nan')}, {'min_interval_s': 0}]:
+        for overrides in [{'enabled': 'y'}, {'allow_headlamp':'y'}, {'decision_budget_s': float('nan')}, {'min_interval_s': 0}]:
             with self.assertRaises(ValueError):settings({'autonomous_ai': overrides})
         c = {'devices': [], 'ai_backend': {'provider': 'ollama', 'model': 'qwen3:8b'}}
         with patch('builtins.input', side_effect=['n', 'n']), redirect_stdout(StringIO()):
