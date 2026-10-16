@@ -4,13 +4,17 @@
 #include <esp_wifi.h>
 #include <esp_now.h>
 #include <HardwareSerial.h>
+#include <Adafruit_NeoPixel.h>
 
 constexpr int BUZZER_PIN=4, TF_RX=17, TF_TX=18;
 constexpr int LIGHT_PIN=1, ILLUMINATION_PIN=5;
+constexpr uint16_t LED_COUNT=24;
+constexpr uint8_t LED_BRIGHTNESS=16;
 constexpr bool ENABLE_LIGHT_SENSOR=true, ENABLE_ILLUMINATION=true;
 static_assert(LIGHT_PIN!=BUZZER_PIN && LIGHT_PIN!=TF_RX && LIGHT_PIN!=TF_TX && LIGHT_PIN!=ILLUMINATION_PIN,"Pin conflict");
 static_assert(ILLUMINATION_PIN!=BUZZER_PIN && ILLUMINATION_PIN!=TF_RX && ILLUMINATION_PIN!=TF_TX,"Pin conflict");
-bool illuminationOn=false;
+Adafruit_NeoPixel ring(LED_COUNT,ILLUMINATION_PIN,NEO_GRB+NEO_KHZ800);
+bool illuminationOn=true;
 constexpr uint8_t CHANNEL=1;
 constexpr uint32_t MAGIC=0x42384238; // B8B8
 constexpr uint8_t VERSION=2, TELEMETRY=1, COMMAND=2, ACK=3, LIGHT_COMMAND=4, LIGHT_ACK=5, SOUND_COMMAND=6, SOUND_ACK=7;
@@ -59,6 +63,12 @@ bool controllerKnown=false;
 uint32_t soundSession=0,lastSoundSequence=0,retiredSoundSessions[4]{};uint8_t retiredSoundSessionAt=0;bool haveSoundSession=false,haveSoundSequence=false;
 
 bool validPacket(const Packet &p){return p.magic==MAGIC && p.version==VERSION;}
+void setIllumination(bool on){
+  illuminationOn=on;
+  if(on)ring.fill(ring.Color(255,255,255));
+  else ring.clear();
+  ring.show();
+}
 bool acceptSoundSequence(uint32_t session,uint32_t sequence){
   if(session==0)return false;
   if(!haveSoundSession || session!=soundSession){
@@ -142,7 +152,7 @@ void onReceive(const esp_now_recv_info_t *info,const uint8_t *data,int len){
 }
 void setup(){
   Serial.begin(115200);randomSeed(esp_random());
-  if(ENABLE_ILLUMINATION){digitalWrite(ILLUMINATION_PIN,LOW);pinMode(ILLUMINATION_PIN,OUTPUT);}
+  if(ENABLE_ILLUMINATION){ring.begin();ring.setBrightness(LED_BRIGHTNESS);setIllumination(true);}
   if(ENABLE_LIGHT_SENSOR){pinMode(LIGHT_PIN,INPUT);analogReadResolution(12);analogSetPinAttenuation(LIGHT_PIN,ADC_11db);}
   ledcAttach(BUZZER_PIN,2000,8);startMood(BOOT);
   lidar.setRxBufferSize(512);lidar.begin(115200,SERIAL_8N1,TF_RX,TF_TX);
@@ -173,7 +183,7 @@ void loop(){
         if((cmd.type==COMMAND || cmd.type==SOUND_COMMAND) && obstacle)accepted=false;
         else if(cmd.type==COMMAND)startMood((Mood)cmd.mood);
         else if(cmd.type==SOUND_COMMAND)startSound((Sound)cmd.mood);
-        else {illuminationOn=cmd.reserved[0]==1;digitalWrite(ILLUMINATION_PIN,illuminationOn?HIGH:LOW);}
+        else setIllumination(cmd.reserved[0]==1);
         if(accepted){
           if(!esp_now_is_peer_exist(src)){
             esp_now_peer_info_t peer{};memcpy(peer.peer_addr,src,6);peer.channel=CHANNEL;peer.encrypt=false;
