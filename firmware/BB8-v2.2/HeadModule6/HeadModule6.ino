@@ -9,12 +9,17 @@
 constexpr int BUZZER_PIN=4, TF_RX=17, TF_TX=18;
 constexpr int LIGHT_PIN=1, ILLUMINATION_PIN=5;
 constexpr uint16_t LED_COUNT=24;
-constexpr uint8_t LED_BRIGHTNESS=16;
+constexpr uint16_t AUTO_FULL_ADC=600, AUTO_ON_ADC=2400, AUTO_OFF_ADC=2700;
+constexpr uint8_t AUTO_MIN_BRIGHTNESS=8, AUTO_MAX_BRIGHTNESS=64;
 constexpr bool ENABLE_LIGHT_SENSOR=true, ENABLE_ILLUMINATION=true;
 static_assert(LIGHT_PIN!=BUZZER_PIN && LIGHT_PIN!=TF_RX && LIGHT_PIN!=TF_TX && LIGHT_PIN!=ILLUMINATION_PIN,"Pin conflict");
 static_assert(ILLUMINATION_PIN!=BUZZER_PIN && ILLUMINATION_PIN!=TF_RX && ILLUMINATION_PIN!=TF_TX,"Pin conflict");
+static_assert(AUTO_FULL_ADC<AUTO_ON_ADC && AUTO_ON_ADC<AUTO_OFF_ADC,"Invalid light thresholds");
+static_assert(AUTO_MIN_BRIGHTNESS>0 && AUTO_MIN_BRIGHTNESS<AUTO_MAX_BRIGHTNESS,"Invalid brightness range");
 Adafruit_NeoPixel ring(LED_COUNT,ILLUMINATION_PIN,NEO_GRB+NEO_KHZ800);
-bool illuminationOn=true;
+bool illuminationOn=false,autoLightingEnabled=true,ringOutputInitialized=false,filteredLightReady=false;
+uint8_t ringBrightness=0;
+uint16_t filteredLight=0;
 constexpr uint8_t CHANNEL=1;
 constexpr uint32_t MAGIC=0x42384238; // B8B8
 constexpr uint8_t VERSION=2, TELEMETRY=1, COMMAND=2, ACK=3, LIGHT_COMMAND=4, LIGHT_ACK=5, SOUND_COMMAND=6, SOUND_ACK=7;
@@ -63,11 +68,29 @@ bool controllerKnown=false;
 uint32_t soundSession=0,lastSoundSequence=0,retiredSoundSessions[4]{};uint8_t retiredSoundSessionAt=0;bool haveSoundSession=false,haveSoundSequence=false;
 
 bool validPacket(const Packet &p){return p.magic==MAGIC && p.version==VERSION;}
-void setIllumination(bool on){
-  illuminationOn=on;
-  if(on)ring.fill(ring.Color(255,255,255));
+void setIlluminationLevel(uint8_t brightness){
+  if(ringOutputInitialized && brightness==ringBrightness)return;
+  ringBrightness=brightness;illuminationOn=brightness>0;
+  if(illuminationOn){ring.setBrightness(brightness);ring.fill(ring.Color(255,255,255));}
   else ring.clear();
-  ring.show();
+  ring.show();ringOutputInitialized=true;
+}
+uint8_t autoBrightnessFor(uint16_t raw,bool currentlyOn){
+  if(currentlyOn){if(raw>=AUTO_OFF_ADC)return 0;}
+  else if(raw>AUTO_ON_ADC)return 0;
+  if(raw>=AUTO_ON_ADC)return AUTO_MIN_BRIGHTNESS;
+  if(raw<=AUTO_FULL_ADC)return AUTO_MAX_BRIGHTNESS;
+  uint32_t darkness=AUTO_ON_ADC-raw;
+  uint32_t span=AUTO_ON_ADC-AUTO_FULL_ADC;
+  return AUTO_MIN_BRIGHTNESS+(uint8_t)((darkness*(AUTO_MAX_BRIGHTNESS-AUTO_MIN_BRIGHTNESS))/span);
+}
+void updateAutoIllumination(uint16_t raw){
+  if(!autoLightingEnabled)return;
+  if(!filteredLightReady){filteredLight=raw;filteredLightReady=true;}
+  else filteredLight=(uint16_t)(((uint32_t)filteredLight*7+raw+4)/8);
+  uint8_t target=autoBrightnessFor(filteredLight,illuminationOn);
+  int delta=(int)target-(int)ringBrightness;if(delta<0)delta=-delta;
+  if(target==0 || ringBrightness==0 || delta>=2)setIlluminationLevel(target);
 }
 bool acceptSoundSequence(uint32_t session,uint32_t sequence){
   if(session==0)return false;
@@ -152,7 +175,7 @@ void onReceive(const esp_now_recv_info_t *info,const uint8_t *data,int len){
 }
 void setup(){
   Serial.begin(115200);randomSeed(esp_random());
-  if(ENABLE_ILLUMINATION){ring.begin();ring.setBrightness(LED_BRIGHTNESS);setIllumination(true);}
+  if(ENABLE_ILLUMINATION){ring.begin();setIlluminationLevel(0);}
   if(ENABLE_LIGHT_SENSOR){pinMode(LIGHT_PIN,INPUT);analogReadResolution(12);analogSetPinAttenuation(LIGHT_PIN,ADC_11db);}
   ledcAttach(BUZZER_PIN,2000,8);startMood(BOOT);
   lidar.setRxBufferSize(512);lidar.begin(115200,SERIAL_8N1,TF_RX,TF_TX);
@@ -183,7 +206,7 @@ void loop(){
         if((cmd.type==COMMAND || cmd.type==SOUND_COMMAND) && obstacle)accepted=false;
         else if(cmd.type==COMMAND)startMood((Mood)cmd.mood);
         else if(cmd.type==SOUND_COMMAND)startSound((Sound)cmd.mood);
-        else setIllumination(cmd.reserved[0]==1);
+        else {autoLightingEnabled=false;setIlluminationLevel(cmd.reserved[0]==1?AUTO_MAX_BRIGHTNESS:0);}
         if(accepted){
           if(!esp_now_is_peer_exist(src)){
             esp_now_peer_info_t peer{};memcpy(peer.peer_addr,src,6);peer.channel=CHANNEL;peer.encrypt=false;
@@ -204,7 +227,7 @@ void loop(){
     p.distance_cm=hasSample?distanceCm:0;p.strength=hasSample?strength:0;
     if(ENABLE_LIGHT_SENSOR){
       uint32_t total=0;for(int i=0;i<8;i++)total+=analogRead(LIGHT_PIN);
-      uint16_t raw=total/8;p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
+      uint16_t raw=total/8;updateAutoIllumination(raw);p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
     }
     if(ENABLE_ILLUMINATION)p.flags|=FLAG_ILLUMINATION;
     p.flags|=FLAG_SOUND;
