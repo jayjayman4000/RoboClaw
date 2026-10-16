@@ -28,4 +28,28 @@ int main(){
  cmd.reserved[0]=1;cmd.sequence=8;onReceive(&info,(uint8_t*)&cmd,sizeof(cmd));loop();assert(illuminationOn);assert(ringBrightness==AUTO_MAX_BRIGHTNESS);assert(ring.getPixelColor(0)==ring.Color(255,255,255));
  cmd.reserved[0]=2;onReceive(&info,(uint8_t*)&cmd,sizeof(cmd));assert(!commandPending);
  cmd.reserved[0]=1;cmd.magic=0;onReceive(&info,(uint8_t*)&cmd,sizeof(cmd));assert(!commandPending);
+
+ Packet lamp{};lamp.magic=MAGIC;lamp.version=VERSION;lamp.type=HEADLAMP_COMMAND;
+ lamp.sequence=9;lamp.sample_age_ms=123;lamp.mood=HEADLAMP_STEADY;lamp.flags=30;
+ lamp.strength=40;lamp.reserved[0]=255;lamp.reserved[1]=0;lamp.reserved[2]=0;
+ onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));loop();
+ assert(headlampMode==HEADLAMP_STEADY);assert(!autoLightingEnabled);assert(illuminationOn);
+ assert(ringBrightness<=HEADLAMP_MAX_BRIGHTNESS);assert(ring.getPixelColor(0)==ring.Color(255,0,0));
+ memcpy(&p,sentPacket.data(),24);assert(p.type==HEADLAMP_ACK);assert(p.sequence==9);
+ assert(p.sample_age_ms==123);assert(p.mood==HEADLAMP_STEADY);assert(p.strength==40);assert(p.flags==30);
+ uint32_t shows=ring.showCount(),packets=sentPacketCount;onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));loop();assert(ring.showCount()==shows);assert(sentPacketCount==packets);
+
+ fakeNow+=31000;loop();assert(headlampMode==HEADLAMP_AUTO);assert(autoLightingEnabled);
+ lamp.sequence=10;lamp.mood=HEADLAMP_BREATHE;lamp.flags=30;lamp.distance_cm=2400;lamp.strength=50;
+ lamp.reserved[0]=0;lamp.reserved[1]=0;lamp.reserved[2]=255;
+ onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));loop();uint8_t first=ringBrightness;
+ fakeNow+=600;loop();assert(ringBrightness!=first);assert(ring.getPixelColor(0)==ring.Color(0,0,255));
+ lamp.sequence=11;lamp.strength=101;onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));assert(!commandPending);
+
+ fakeNow=UINT32_MAX-1000;lamp.sequence=12;lamp.mood=HEADLAMP_OFF;lamp.flags=1;lamp.distance_cm=0;lamp.strength=0;
+ lamp.reserved[0]=lamp.reserved[1]=lamp.reserved[2]=0;onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));loop();assert(headlampMode==HEADLAMP_OFF);
+ fakeNow+=1500;loop();assert(headlampMode==HEADLAMP_AUTO);
+ lamp.sequence=13;lamp.mood=HEADLAMP_BLINK;lamp.flags=30;lamp.distance_cm=400;lamp.strength=50;lamp.reserved[0]=255;
+ onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));loop();assert(illuminationOn);
+ fakeNow+=200;loop();assert(!illuminationOn);
 }

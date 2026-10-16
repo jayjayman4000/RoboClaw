@@ -111,6 +111,15 @@ class SerialTelemetry:
                 extension.update({'light_supported':ls,'illumination_supported':led,'light_raw':raw,'light_age_ms':light_age,
                                   'light_percent':light_percent,'light_units':'relative ADC percentage, not lux',
                                   'illumination_on':on})
+            if 'headlamp_supported' in data:
+                supported=data.get('headlamp_supported');mode=data.get('headlamp_mode');level=data.get('headlamp_level')
+                if type(supported) is not bool:raise ValueError('Invalid headlamp capability flag')
+                if supported:
+                    if link is not True or mode not in ('auto','off','steady','breathe','blink') or type(level) is not int or not 0<=level<=64:
+                        raise ValueError('Invalid headlamp state')
+                elif mode is not None or level is not None:raise ValueError('Unsupported headlamp state')
+                extension.update({'headlamp_supported':supported,'headlamp_mode':mode,'headlamp_level':level,
+                                  'headlamp_level_max':64})
             self.latest = {**extension,"source": "hardware", "protocol_version": version,
                            "telemetry_schema": "bb8-v2" if bb8_v2 else ("v1" if version == 1 else "legacy"),
                            "rx_overwrites": overwrites,
@@ -189,7 +198,8 @@ class SerialTelemetry:
                           self.latest.get('head_link_valid') is True and age_s is not None and
                           self.latest['light_age_ms']/1000+age_s<=min(limit,.350))
         illumination_fresh=bool(self.serial is not None and self.latest and self.latest.get('illumination_supported') and self.latest.get('head_link_valid') is True and age_s is not None and age_s<=.350)
-        return {'illumination_state_usable':illumination_fresh,'light_usable':light_usable, **(self.latest or {"source": "hardware", "distance_m": None, "strength": None}),
+        headlamp_fresh=bool(self.serial is not None and self.latest and self.latest.get('headlamp_supported') and self.latest.get('head_link_valid') is True and age_s is not None and age_s<=.350)
+        return {'headlamp_state_usable':headlamp_fresh,'illumination_state_usable':illumination_fresh,'light_usable':light_usable, **(self.latest or {"source": "hardware", "distance_m": None, "strength": None}),
                 "controller": self.controller,
                 "enabled_capabilities": self.config.get("enabled_capabilities"),
                 "health": health, "connection": "connected" if self.serial else "disconnected",

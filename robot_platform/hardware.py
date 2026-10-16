@@ -25,21 +25,25 @@ def recent(driver,timeout,predicate):
 def configure(path,config,save,name,timeout=5,driver_factory=BB8Bridge):
     from .setup import yes
     device=device_for(config,name)
-    driver=driver_factory({**device,'extensions':['ambient_light','illumination','droid_language']})
+    driver=driver_factory({**device,'extensions':['ambient_light','illumination','headlamp','droid_language']})
     try:
-        state=recent(driver,timeout,lambda s:s.get('head_link_valid') is True and s.get('received_age_s') is not None and s['received_age_s']<=.35 and any(key in s for key in ('light_supported','illumination_supported','sound_supported')))
+        state=recent(driver,timeout,lambda s:s.get('head_link_valid') is True and s.get('received_age_s') is not None and s['received_age_s']<=.35 and any(key in s for key in ('light_supported','illumination_supported','headlamp_supported','sound_supported')))
     finally:driver.close()
-    if not state or not state.get('head_link_valid') or state.get('received_age_s') is None or state['received_age_s']>.35 or not (state.get('light_supported') or state.get('illumination_supported') or state.get('sound_supported')):
+    if not state or not state.get('head_link_valid') or state.get('received_age_s') is None or state['received_age_s']>.35 or not (state.get('light_supported') or state.get('illumination_supported') or state.get('headlamp_supported') or state.get('sound_supported')):
         raise ValueError('No recent head hardware extensions detected. Flash both matching BB8 sketches, close other serial sessions and retry.')
     updated=deepcopy(config);selected=[]
     print(f'Head hardware detected through {name}. Light GPIO1; illumination GPIO5. Firmware fixes these pins; host setup does not rewire them.')
     if state.get('light_supported') and yes('Enable ambient light readings? (relative brightness, not lux)'):selected.append('ambient_light')
     if state.get('illumination_supported') and yes('Enable illumination output?'):selected.append('illumination')
+    if state.get('headlamp_supported') and yes('Enable bounded addressable headlamp control?'):selected.append('headlamp')
     if state.get('sound_supported') and yes('Enable the passive-buzzer droid language?'):selected.append('droid_language')
     device_for(updated,name)['extensions']=selected
     if 'illumination' in selected:
         updated=set_permission(updated,'set_illumination',yes('Allow AI to switch illumination when you request it?'),name)
     else:updated=set_permission(updated,'set_illumination',False,name)
+    if 'headlamp' in selected:
+        updated=set_permission(updated,'set_headlamp',yes('Allow AI to choose bounded headlamp modes and colors?'),name)
+    else:updated=set_permission(updated,'set_headlamp',False,name)
     print('Enabled extensions: '+(', '.join(selected) or 'none'))
     if not yes('Save hardware configuration?'):
         print('Cancelled. Configuration unchanged.');return False

@@ -26,17 +26,22 @@ Light sampling averages eight 12-bit ADC reads per 50 ms telemetry cycle with `A
 .\.venv\Scripts\robot.exe light BodyModule
 .\.venv\Scripts\robot.exe illumination BodyModule on
 .\.venv\Scripts\robot.exe illumination BodyModule off
+.\.venv\Scripts\robot.exe headlamp BodyModule auto
+.\.venv\Scripts\robot.exe headlamp BodyModule steady --color red --brightness-percent 35 --duration-s 30
+.\.venv\Scripts\robot.exe headlamp BodyModule breathe --color blue --brightness-percent 30 --period-ms 2400 --duration-s 45
 ```
 
-Setup passively detects the features, asks which to enable, asks whether AI may switch illumination, and saves only after confirmation. Existing AI endpoint, port and device permissions are retained. Normal `robot setup` also offers head hardware detection for a configured bb8-v2 bridge. No host code changes or new driver registration are required for these two firmware-supported extensions. Additional component types still require firmware and host support; setup cannot implement an unknown component from its wires alone.
+Setup passively detects the features, asks which to enable, separately asks whether AI may use legacy illumination or bounded headlamp control, and saves only after confirmation. Existing AI endpoint, port and device permissions are retained. Normal `robot setup` also offers head hardware detection for a configured bb8-v2 bridge.
 
-Cover/uncover the photoresistor and verify the ring turns on, ramps brighter as the ADC falls, and returns off without flicker when the sensor is uncovered. Head GPIO acknowledgments do not prove visible illumination. To allow AI output later, use `robot capabilities enable set_illumination --device BodyModule`, subject to any global disable. Restart chat; ask “What is the ambient light level?” and “Turn illumination on/off.” Sensor access uses the existing `read_robot_state` permission.
+Cover/uncover the photoresistor and verify the ring turns on, ramps brighter as the ADC falls, and returns off without flicker when the sensor is uncovered. Test each generic manual mode and confirm it returns to `auto` when its 1–300 second lease expires. Head acknowledgments do not prove visible illumination. To allow AI selection, enable `set_headlamp` for the body device and restart chat. The AI chooses generic mode/color parameters at runtime; no emotional or presentation meaning is compiled into either ESP32 sketch.
 
 ## Compatible radio extension
 
 The original 24-byte packed packet, magic and version 2 are retained. Telemetry flags add bit 2 (light present), bit 3 (illumination present), and bit 4 (illumination GPIO on). Telemetry reserved bytes 0/1 encode a little-endian 12-bit ADC value; light is sampled immediately before sending. Body `light_age_ms` estimates age from body receipt, so unmeasured over-the-air transit is not included. Host adds serial receipt age and requires a connected head and age no greater than 350 ms; light freshness is independent of LiDAR validity.
 
 Packet type 4 requests illumination; reserved[0] is exactly 0 or 1. Type 5 acknowledges that command with the same sequence and value. Existing mood commands/type 2 and acknowledgments/type 3 are retained. Body accepts acknowledgments only from its paired head. Serial commands are exact lines `illumination on` / `illumination off`. Either explicit command disables automatic ambient control for the rest of that head boot: manual `on` selects the capped 64/255 level and manual `off` remains off; rebooting the head restores automatic mode. Old heads have no feature flags and cannot authorize illumination; old bodies ignore the extra telemetry fields. The host writes once, matches command ID plus boolean state, and never retries an ambiguous output.
+
+Packet types 8/9 add the leased addressable-headlamp request/acknowledgment while retaining the 24-byte packet and protocol version 2. Mode is `auto`, `off`, `steady`, `breathe`, or `blink`; RGB, requested brightness percentage, effect period, duration, controller session, and monotonic command sequence are validated before actuation. `auto` restores the ambient white flashlight. Every non-auto request expires in at most 300 seconds and returns to `auto`; brightness remains capped at 64/255 regardless of host input. The head rejects duplicate/out-of-order requests and the body/host require a matching session, command ID, mode, RGB, brightness, period, and duration acknowledgment. ESP-NOW is still unencrypted prototype transport; MAC locking and replay checks do not prevent active spoofing, so provision encryption and fixed peer allowlists before operation outside controlled bench conditions.
 
 ## Droid-language buzzer extension
 
