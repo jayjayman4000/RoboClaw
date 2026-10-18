@@ -25,13 +25,15 @@ inline int analogRead(int){return adcValue;}
 inline void ledcWriteTone(int,uint32_t hz){lastToneHz=hz;}
 inline void ledcAttach(int,int,int){}
 struct FakeSerial {
- std::string output,input;size_t inputAt=0;
+ std::string output,input;size_t inputAt=0;int writeCapacity=4096;
  void begin(int){} int available(){return (int)(input.size()-inputAt);}int read(){return inputAt<input.size()?(uint8_t)input[inputAt++]:-1;}
  void inject(const char*s){input=s;inputAt=0;}
  void setRxBufferSize(int){} void begin(int,int,int,int){}
  void print(const char*s){output+=s;}void print(uint32_t n){output+=std::to_string(n);}
  void println(const char*s){output+=s;output+='\n';}
  void printf(const char*fmt,...){char b[2048];va_list a;va_start(a,fmt);vsnprintf(b,sizeof(b),fmt,a);va_end(a);output+=b;}
+ int availableForWrite(){return writeCapacity;}
+ size_t write(const uint8_t*p,size_t n){output.append((const char*)p,n);return n;}
 };
 inline FakeSerial Serial;
 struct HardwareSerial:FakeSerial {HardwareSerial(int){}};

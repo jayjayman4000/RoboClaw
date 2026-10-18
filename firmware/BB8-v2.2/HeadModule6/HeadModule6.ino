@@ -74,7 +74,6 @@ uint16_t headlampPeriodMs=0,headlampDurationS=0;
 uint32_t headlampStartedAt=0,headlampExpiresAt=0;
 bool headlampHasLease=false;
 char usbLine[128]{};uint8_t usbLinePos=0;uint32_t directCommandId=0,directTelemetrySequence=0,lastDirectTelemetry=0;
-uint16_t latestLightRaw=0;
 
 bool validPacket(const Packet &p){return p.magic==MAGIC && p.version==VERSION;}
 void setRingOutput(uint8_t brightness,uint8_t red,uint8_t green,uint8_t blue){
@@ -209,8 +208,10 @@ void directUsbTick(uint32_t now){
   }
   if((uint32_t)(now-lastDirectTelemetry)>=200){
     lastDirectTelemetry=now;
-    Serial.printf("{\"type\":\"telemetry\",\"dist\":null,\"brake\":false,\"sensor_valid\":false,\"head_connected\":true,\"strength\":null,\"sample_age_ms\":null,\"seq\":%lu,\"rx_overwrites\":0,\"light_supported\":true,\"illumination_supported\":true,\"light_raw\":%u,\"light_age_ms\":0,\"illumination_on\":%s,\"sound_supported\":false,\"headlamp_supported\":true,\"headlamp_mode\":\"%s\",\"headlamp_level\":%u}\n",
-                  (unsigned long)++directTelemetrySequence,latestLightRaw,illuminationOn?"true":"false",headlampModeName(headlampMode),ringBrightness);
+    char line[256];int count=snprintf(line,sizeof(line),
+      "{\"type\":\"telemetry\",\"dist\":null,\"sensor_valid\":false,\"head_connected\":true,\"sample_age_ms\":null,\"seq\":%lu,\"rx_overwrites\":0,\"headlamp_supported\":true,\"headlamp_mode\":\"%s\",\"headlamp_level\":%u}\n",
+      (unsigned long)++directTelemetrySequence,headlampModeName(headlampMode),ringBrightness);
+    if(count>0 && count<(int)sizeof(line) && Serial.availableForWrite()>=count)Serial.write((const uint8_t*)line,(size_t)count);
   }
 }
 void setTone(uint32_t hz){ledcWriteTone(BUZZER_PIN,hz);}
@@ -349,7 +350,7 @@ void loop(){
     p.distance_cm=hasSample?distanceCm:0;p.strength=hasSample?strength:0;
     if(ENABLE_LIGHT_SENSOR){
       uint32_t total=0;for(int i=0;i<8;i++)total+=analogRead(LIGHT_PIN);
-      uint16_t raw=total/8;latestLightRaw=raw;updateAutoIllumination(raw);p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
+      uint16_t raw=total/8;updateAutoIllumination(raw);p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
     }
     if(ENABLE_ILLUMINATION){p.flags|=FLAG_ILLUMINATION|FLAG_HEADLAMP;p.mood=(uint8_t)headlampMode;p.reserved[2]=ringBrightness;}
     p.flags|=FLAG_SOUND;

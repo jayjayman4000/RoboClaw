@@ -63,4 +63,8 @@ int main(){
  assert(Serial.output.find("\"headlamp_supported\":true")!=std::string::npos);
  HeadlampMode before=headlampMode;Serial.output.clear();Serial.inject("headlamp off 4294967297\n");loop();
  assert(headlampMode==before);assert(Serial.output.find("\"type\":\"error\"")!=std::string::npos);
+ Serial.output.clear();Serial.writeCapacity=0;fakeNow+=250;loop();
+ assert(Serial.output.find("\"type\":\"telemetry\"")==std::string::npos);
+ Serial.inject("headlamp auto\n");loop();assert(headlampMode==HEADLAMP_AUTO);
+ assert(Serial.output.find("\"type\":\"headlamp_ack\"")!=std::string::npos);Serial.writeCapacity=4096;
 }
