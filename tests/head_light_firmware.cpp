@@ -52,4 +52,15 @@ int main(){
  lamp.sequence=13;lamp.mood=HEADLAMP_BLINK;lamp.flags=30;lamp.distance_cm=400;lamp.strength=50;lamp.reserved[0]=255;
  onReceive(&info,(uint8_t*)&lamp,sizeof(lamp));loop();assert(illuminationOn);
  fakeNow+=200;loop();assert(!illuminationOn);
+
+ Serial.output.clear();Serial.inject("headlamp steady 255 0 0 40 3\n");loop();
+ assert(headlampMode==HEADLAMP_STEADY);assert(headlampRed==255);assert(headlampGreen==0);assert(headlampBlue==0);
+ assert(headlampBrightnessPercent==40);assert(headlampDurationS==3);
+ assert(Serial.output.find("\"type\":\"command_sent\"")!=std::string::npos);
+ assert(Serial.output.find("\"type\":\"headlamp_ack\"")!=std::string::npos);
+ Serial.output.clear();fakeNow+=250;loop();
+ assert(Serial.output.find("\"type\":\"telemetry\"")!=std::string::npos);
+ assert(Serial.output.find("\"headlamp_supported\":true")!=std::string::npos);
+ HeadlampMode before=headlampMode;Serial.output.clear();Serial.inject("headlamp off 4294967297\n");loop();
+ assert(headlampMode==before);assert(Serial.output.find("\"type\":\"error\"")!=std::string::npos);
 }

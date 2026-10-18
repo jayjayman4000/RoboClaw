@@ -519,6 +519,8 @@ robot chat --device BodyModule --debug
 
 The light percentage is relative ADC scale, not calibrated lux. In `auto`, darkness controls the white flashlight locally. RoboClaw's separate `set_headlamp` tool exposes only generic `auto`, `off`, `steady`, `breathe`, and `blink` primitives plus named color, bounded brightness, period, and duration. Personality code or the selected AI decides their meaning at runtime; the firmware contains no emotion-to-light mapping. Manual non-auto requests expire after 1–300 seconds and return to `auto`; firmware always caps NeoPixel brightness at 64/255. Commands are written once and require an exact matching acknowledgment, which confirms head processing but not visible light. Existing v2.1 installations retain LiDAR and buzzer support while headlamp tools remain unavailable until matching firmware advertises and setup enables them.
 
+For temporary bench use without the body USB bridge, matching head firmware also accepts the same bounded `headlamp ...` serial commands directly over the head's native USB port and publishes compatible JSON telemetry/acknowledgments. Configure that port as a separate `bb8-v2` device with only `ambient_light` and `headlamp` extensions. Never select both the temporary direct-head device and the normal body relay in one live service: they are competing owners of the same output. Disable the direct device and restore the body relay before robot installation.
+
 ### Local darkness behavior (no firmware update)
 
 RoboClaw can now react to fresh sensor readings without a chat prompt or AI connection.

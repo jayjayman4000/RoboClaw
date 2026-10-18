@@ -73,6 +73,8 @@ uint8_t headlampRed=255,headlampGreen=255,headlampBlue=255,headlampBrightnessPer
 uint16_t headlampPeriodMs=0,headlampDurationS=0;
 uint32_t headlampStartedAt=0,headlampExpiresAt=0;
 bool headlampHasLease=false;
+char usbLine[128]{};uint8_t usbLinePos=0;uint32_t directCommandId=0,directTelemetrySequence=0,lastDirectTelemetry=0;
+uint16_t latestLightRaw=0;
 
 bool validPacket(const Packet &p){return p.magic==MAGIC && p.version==VERSION;}
 void setRingOutput(uint8_t brightness,uint8_t red,uint8_t green,uint8_t blue){
@@ -143,6 +145,73 @@ void headlampTick(uint32_t now){
     level=(uint8_t)((uint32_t)level*wave/(half?half:1));
   }else if(headlampMode==HEADLAMP_BLINK && ((now-headlampStartedAt)%headlampPeriodMs)>=headlampPeriodMs/2)level=0;
   setRingOutput(level,headlampRed,headlampGreen,headlampBlue);
+}
+const char *headlampModeName(HeadlampMode mode){
+  static const char *names[]={"auto","off","steady","breathe","blink"};
+  return mode<HEADLAMP_MODE_COUNT?names[mode]:"invalid";
+}
+void skipSpaces(const char *&p){while(*p==' '||*p=='\t')p++;}
+bool parseUnsigned(const char *&p,uint32_t limit,uint32_t &value){
+  skipSpaces(p);if(*p<'0'||*p>'9')return false;value=0;
+  while(*p>='0'&&*p<='9'){
+    uint8_t digit=(uint8_t)(*p-'0');if(value>(limit-digit)/10)return false;
+    value=value*10+digit;p++;
+  }
+  if(*p && *p!=' ' && *p!='\t')return false;return true;
+}
+bool parseValues(const char *p,uint32_t *values,const uint32_t *limits,uint8_t count){
+  for(uint8_t i=0;i<count;i++)if(!parseUnsigned(p,limits[i],values[i]))return false;
+  skipSpaces(p);return *p==0;
+}
+void directHeadlampAck(uint32_t id){
+  Serial.printf("{\"type\":\"headlamp_ack\",\"id\":%lu,\"mode\":\"%s\",\"red\":%u,\"green\":%u,\"blue\":%u,\"brightness_percent\":%u,\"period_ms\":%u,\"duration_s\":%u}\n",
+                (unsigned long)id,headlampModeName(headlampMode),headlampRed,headlampGreen,headlampBlue,
+                headlampBrightnessPercent,headlampPeriodMs,headlampDurationS);
+}
+void handleDirectHeadlamp(const char *line,uint32_t now){
+  if(strncmp(line,"headlamp ",9)!=0){Serial.println("{\"type\":\"error\",\"error\":\"unsupported direct USB command\"}");return;}
+  const char *request=line+9;HeadlampMode mode=HEADLAMP_AUTO;uint32_t value[6]{};
+  uint32_t red=0,green=0,blue=0,brightness=0,period=0,duration=0;
+  bool valid=false;
+  if(!strcmp(request,"auto")){valid=true;}
+  else if(!strncmp(request,"off ",4)){
+    const uint32_t limits[]={300};valid=parseValues(request+4,value,limits,1)&&value[0]>=1;mode=HEADLAMP_OFF;duration=value[0];
+  }else if(!strncmp(request,"steady ",7)){
+    const uint32_t limits[]={255,255,255,100,300};valid=parseValues(request+7,value,limits,5);
+    mode=HEADLAMP_STEADY;red=value[0];green=value[1];blue=value[2];brightness=value[3];duration=value[4];
+    valid=valid&&(red||green||blue)&&brightness>=1&&duration>=1;
+  }else{
+    const char *numbers=nullptr;
+    if(!strncmp(request,"breathe ",8)){mode=HEADLAMP_BREATHE;numbers=request+8;}
+    else if(!strncmp(request,"blink ",6)){mode=HEADLAMP_BLINK;numbers=request+6;}
+    if(numbers){
+      const uint32_t limits[]={255,255,255,100,5000,300};valid=parseValues(numbers,value,limits,6);
+      red=value[0];green=value[1];blue=value[2];brightness=value[3];period=value[4];duration=value[5];
+      valid=valid&&(red||green||blue)&&brightness>=1&&period>=300&&duration>=1;
+    }
+  }
+  if(!valid){Serial.println("{\"type\":\"error\",\"error\":\"invalid bounded headlamp command\"}");return;}
+  uint32_t id=++directCommandId;
+  Serial.printf("{\"type\":\"command_sent\",\"id\":%lu,\"accepted_by_radio\":true,\"transport\":\"direct_usb\"}\n",(unsigned long)id);
+  startHeadlamp(mode,(uint8_t)red,(uint8_t)green,(uint8_t)blue,(uint8_t)brightness,(uint16_t)period,(uint16_t)duration,now);
+  directHeadlampAck(id);
+}
+void directUsbTick(uint32_t now){
+  uint8_t budget=96;
+  while(budget-- && Serial.available()){
+    int raw=Serial.read();if(raw<0)break;char c=(char)raw;
+    if(c=='\r')continue;
+    if(c=='\n'){
+      usbLine[usbLinePos]=0;if(usbLinePos)handleDirectHeadlamp(usbLine,now);usbLinePos=0;continue;
+    }
+    if(usbLinePos<sizeof(usbLine)-1)usbLine[usbLinePos++]=c;
+    else {usbLinePos=0;Serial.println("{\"type\":\"error\",\"error\":\"direct USB command too long\"}");}
+  }
+  if((uint32_t)(now-lastDirectTelemetry)>=200){
+    lastDirectTelemetry=now;
+    Serial.printf("{\"type\":\"telemetry\",\"dist\":null,\"brake\":false,\"sensor_valid\":false,\"head_connected\":true,\"strength\":null,\"sample_age_ms\":null,\"seq\":%lu,\"rx_overwrites\":0,\"light_supported\":true,\"illumination_supported\":true,\"light_raw\":%u,\"light_age_ms\":0,\"illumination_on\":%s,\"sound_supported\":false,\"headlamp_supported\":true,\"headlamp_mode\":\"%s\",\"headlamp_level\":%u}\n",
+                  (unsigned long)++directTelemetrySequence,latestLightRaw,illuminationOn?"true":"false",headlampModeName(headlampMode),ringBrightness);
+  }
 }
 void setTone(uint32_t hz){ledcWriteTone(BUZZER_PIN,hz);}
 void startMood(Mood m){soundActive=false;soundStepRunning=false;mood=m;step=0;toneAt=0;talkSteps=(uint8_t)random(10,18);setTone(0);}
@@ -270,6 +339,7 @@ void loop(){
     }
   }
   audioTick(now);
+  directUsbTick(now);
   headlampTick(now);
   if((uint32_t)(now-lastSend)>=SEND_PERIOD_MS){
     lastSend=now;
@@ -279,7 +349,7 @@ void loop(){
     p.distance_cm=hasSample?distanceCm:0;p.strength=hasSample?strength:0;
     if(ENABLE_LIGHT_SENSOR){
       uint32_t total=0;for(int i=0;i<8;i++)total+=analogRead(LIGHT_PIN);
-      uint16_t raw=total/8;updateAutoIllumination(raw);p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
+      uint16_t raw=total/8;latestLightRaw=raw;updateAutoIllumination(raw);p.flags|=FLAG_LIGHT;p.reserved[0]=raw&255;p.reserved[1]=raw>>8;
     }
     if(ENABLE_ILLUMINATION){p.flags|=FLAG_ILLUMINATION|FLAG_HEADLAMP;p.mood=(uint8_t)headlampMode;p.reserved[2]=ringBrightness;}
     p.flags|=FLAG_SOUND;
