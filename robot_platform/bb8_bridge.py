@@ -7,7 +7,7 @@ MOODS = ('silent', 'happy', 'curious', 'talk', 'alarm', 'boot')
 SOUNDS = ('hello', 'yes', 'no', 'question', 'acknowledge', 'excited', 'confused', 'warning', 'goodbye')
 HEADLAMP_MODES = ('auto', 'off', 'steady', 'breathe', 'blink')
 HEADLAMP_COLORS = {
-    'red': (255, 0, 0), 'orange': (255, 96, 0), 'yellow': (255, 255, 0),
+    'red': (255, 0, 0), 'orange': (255, 32, 0), 'yellow': (255, 96, 0),
     'green': (0, 255, 0), 'cyan': (0, 255, 255), 'blue': (0, 0, 255),
     'purple': (160, 0, 255), 'white': (255, 255, 255),
 }

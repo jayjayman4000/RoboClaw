@@ -69,6 +69,12 @@ class LightTest(unittest.TestCase):
         for action in invalid:
             with self.assertRaises(ValueError):driver.command(action)
         self.assertEqual(self.port.writes,[])
+    def test_calibrated_yellow_and_orange_are_distinct(self):
+        from robot_platform.bb8_bridge import headlamp_request
+        base={'action':'headlamp','mode':'steady','brightness_percent':40,'duration_s':10}
+        yellow=headlamp_request({**base,'color':'yellow'});orange=headlamp_request({**base,'color':'orange'})
+        self.assertEqual((yellow['red'],yellow['green'],yellow['blue']),(255,96,0))
+        self.assertEqual((orange['red'],orange['green'],orange['blue']),(255,32,0))
     def test_old_firmware_cannot_authorize_illumination(self):
         driver=self.make();data=telemetry()
         for key in ['light_supported','illumination_supported','light_raw','light_age_ms','illumination_on']:data.pop(key)
